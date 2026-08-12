@@ -3,14 +3,15 @@ package com.upi.reconcile.connectors;
 import com.upi.reconcile.api.WebhookRequest;
 import com.upi.reconcile.connectors.crypto.AesGcmEncryptor;
 import com.upi.reconcile.connectors.crypto.PayuHashVerifier;
-import com.upi.reconcile.connectors.domain.Merchant;
-import com.upi.reconcile.connectors.domain.MerchantRepository;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnection;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnectionRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -45,17 +46,17 @@ import java.util.UUID;
 @Component
 public class PayUConnector implements PaymentGatewayConnector {
 
-    private final MerchantRepository merchantRepository;
+    private final MerchantGatewayConnectionRepository connectionRepository;
     private final AesGcmEncryptor encryptor;
     private final UUID defaultRemitterBankId;
     private final UUID defaultBeneficiaryBankId;
 
     public PayUConnector(
-            MerchantRepository merchantRepository,
+            MerchantGatewayConnectionRepository connectionRepository,
             AesGcmEncryptor encryptor,
             @Value("${app.connectors.default-remitter-bank-id}") String remitterBankId,
             @Value("${app.connectors.default-beneficiary-bank-id}") String beneficiaryBankId) {
-        this.merchantRepository = merchantRepository;
+        this.connectionRepository = connectionRepository;
         this.encryptor = encryptor;
         this.defaultRemitterBankId = UUID.fromString(remitterBankId);
         this.defaultBeneficiaryBankId = UUID.fromString(beneficiaryBankId);
@@ -97,19 +98,26 @@ public class PayUConnector implements PaymentGatewayConnector {
         String udf4        = nvl(rawPayload, "udf4");
         String udf5        = nvl(rawPayload, "udf5");
 
-        // ── 2. Look up the merchant to get key + salt ────────────────
+        // ── 2. Look up the connection to get key + salt ────────────────
         // The controller passes merchant_id in the map under a reserved key
         String merchantIdStr = (String) rawPayload.get("__merchant_id__");
         if (merchantIdStr == null || merchantIdStr.isBlank()) {
             throw new SecurityException("Missing __merchant_id__ context — cannot verify PayU hash");
         }
 
-        Merchant merchant = merchantRepository.findById(UUID.fromString(merchantIdStr))
-                .orElseThrow(() -> new SecurityException(
-                        "Unknown merchant_id for PayU hash verification: " + merchantIdStr));
+        UUID merchantUuid = UUID.fromString(merchantIdStr);
+        Optional<MerchantGatewayConnection> connOpt = connectionRepository
+                .findByMerchant_MerchantIdAndGatewayAndStatus(
+                        merchantUuid, "payu", MerchantGatewayConnection.STATUS_ACTIVE);
 
-        String merchantKey  = encryptor.decrypt(merchant.getEncryptedApiKey());
-        String merchantSalt = encryptor.decrypt(merchant.getEncryptedApiSecret());
+        if (connOpt.isEmpty()) {
+            throw new SecurityException(
+                    "No active PayU connection found for merchant: " + merchantIdStr);
+        }
+
+        MerchantGatewayConnection connection = connOpt.get();
+        String merchantKey  = encryptor.decrypt(connection.getEncryptedApiKey());
+        String merchantSalt = encryptor.decrypt(connection.getEncryptedApiSecret());
 
         // ── 3. Verify SHA-512 hash ───────────────────────────────────
         boolean hashValid = PayuHashVerifier.verify(

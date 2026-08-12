@@ -1,6 +1,8 @@
 package com.upi.reconcile.security;
 
 import com.upi.reconcile.connectors.domain.Merchant;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnection;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnectionRepository;
 import com.upi.reconcile.connectors.domain.MerchantRepository;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
@@ -18,8 +20,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Authentication controller — signup, login, and "who am I" endpoints.
@@ -37,6 +41,7 @@ import java.util.UUID;
 public class MerchantAuthController {
 
     private final MerchantRepository merchantRepository;
+    private final MerchantGatewayConnectionRepository connectionRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
 
@@ -63,10 +68,6 @@ public class MerchantAuthController {
                 .email(request.email())
                 .passwordHash(passwordEncoder.encode(request.password()))
                 .businessName(request.businessName())
-                // Stub gateway fields — merchant calls /api/merchants/connect later
-                .connectedGateway("")
-                .encryptedApiKey("")
-                .encryptedApiSecret("")
                 .createdAt(OffsetDateTime.now())
                 .build();
 
@@ -122,11 +123,19 @@ public class MerchantAuthController {
                     .body(Map.of("error", "Merchant not found"));
         }
 
+        // Gather active gateway names from the connections table
+        List<String> activeGateways = connectionRepository
+                .findByMerchant_MerchantId(merchantId)
+                .stream()
+                .filter(c -> MerchantGatewayConnection.STATUS_ACTIVE.equals(c.getStatus()))
+                .map(MerchantGatewayConnection::getGateway)
+                .collect(Collectors.toList());
+
         return ResponseEntity.ok(Map.of(
                 "merchant_id", merchant.getMerchantId(),
                 "email", merchant.getEmail(),
                 "business_name", merchant.getBusinessName() != null ? merchant.getBusinessName() : "",
-                "connected_gateway", merchant.getConnectedGateway(),
+                "connected_gateways", activeGateways,
                 "created_at", merchant.getCreatedAt().toString()));
     }
 }

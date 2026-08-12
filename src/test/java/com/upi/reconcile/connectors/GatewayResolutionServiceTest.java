@@ -2,7 +2,8 @@ package com.upi.reconcile.connectors;
 
 import com.upi.reconcile.connectors.crypto.AesGcmEncryptor;
 import com.upi.reconcile.connectors.domain.Merchant;
-import com.upi.reconcile.connectors.domain.MerchantRepository;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnection;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnectionRepository;
 import com.upi.reconcile.domain.Bank;
 import com.upi.reconcile.domain.StateTransition;
 import com.upi.reconcile.domain.StateTransitionRepository;
@@ -49,7 +50,7 @@ class GatewayResolutionServiceTest {
 
     @Mock private TransactionRepository transactionRepository;
     @Mock private StateTransitionRepository stateTransitionRepository;
-    @Mock private MerchantRepository merchantRepository;
+    @Mock private MerchantGatewayConnectionRepository connectionRepository;
     @Mock private RazorpayApiClient razorpayApiClient;
     @Mock private AesGcmEncryptor encryptor;
     @Mock private ApplicationEventPublisher eventPublisher;
@@ -68,7 +69,7 @@ class GatewayResolutionServiceTest {
         service = new GatewayResolutionService(
                 transactionRepository,
                 stateTransitionRepository,
-                merchantRepository,
+                connectionRepository,
                 razorpayApiClient,
                 encryptor,
                 stateMachine,
@@ -91,13 +92,20 @@ class GatewayResolutionServiceTest {
                 .build();
     }
 
-    private Merchant buildMerchant() {
-        return Merchant.builder()
+    private MerchantGatewayConnection buildRazorpayConnection() {
+        Merchant merchant = Merchant.builder()
                 .merchantId(UUID.randomUUID())
                 .name("Test Merchant")
-                .connectedGateway("razorpay")
+                .build();
+        return MerchantGatewayConnection.builder()
+                .connectionId(UUID.randomUUID())
+                .merchant(merchant)
+                .gateway("razorpay")
                 .encryptedApiKey(ENCRYPTED_KEY)
                 .encryptedApiSecret(ENCRYPTED_SECRET)
+                .webhookSecret("test_webhook_secret")
+                .status(MerchantGatewayConnection.STATUS_ACTIVE)
+                .connectedAt(OffsetDateTime.now())
                 .build();
     }
 
@@ -108,13 +116,13 @@ class GatewayResolutionServiceTest {
     void razorpayCaptured_transitionsToSuccess() {
         String paymentId = "pay_TestCaptured123";
         Transaction txn = buildPenaltyTransaction(paymentId, "razorpay");
-        Merchant merchant = buildMerchant();
+        MerchantGatewayConnection connection = buildRazorpayConnection();
 
         when(transactionRepository.findByStateAndSourceGateway(
                 TransactionState.PENALTY_ACCRUING, "razorpay"))
                 .thenReturn(List.of(txn));
-        when(merchantRepository.findByConnectedGateway("razorpay"))
-                .thenReturn(List.of(merchant));
+        when(connectionRepository.findAll())
+                .thenReturn(List.of(connection));
         when(encryptor.decrypt(ENCRYPTED_KEY)).thenReturn(DECRYPTED_KEY);
         when(encryptor.decrypt(ENCRYPTED_SECRET)).thenReturn(DECRYPTED_SECRET);
         when(razorpayApiClient.fetchPaymentStatus(DECRYPTED_KEY, DECRYPTED_SECRET, paymentId))
@@ -151,13 +159,13 @@ class GatewayResolutionServiceTest {
     void razorpayFailed_refundsAndTransitionsToResolvedRefunded() {
         String paymentId = "pay_TestFailed456";
         Transaction txn = buildPenaltyTransaction(paymentId, "razorpay");
-        Merchant merchant = buildMerchant();
+        MerchantGatewayConnection connection = buildRazorpayConnection();
 
         when(transactionRepository.findByStateAndSourceGateway(
                 TransactionState.PENALTY_ACCRUING, "razorpay"))
                 .thenReturn(List.of(txn));
-        when(merchantRepository.findByConnectedGateway("razorpay"))
-                .thenReturn(List.of(merchant));
+        when(connectionRepository.findAll())
+                .thenReturn(List.of(connection));
         when(encryptor.decrypt(ENCRYPTED_KEY)).thenReturn(DECRYPTED_KEY);
         when(encryptor.decrypt(ENCRYPTED_SECRET)).thenReturn(DECRYPTED_SECRET);
         when(razorpayApiClient.fetchPaymentStatus(DECRYPTED_KEY, DECRYPTED_SECRET, paymentId))
@@ -196,9 +204,9 @@ class GatewayResolutionServiceTest {
         // Act
         service.resolveRazorpayTransactions(OffsetDateTime.now());
 
-        // Assert — no API calls, no merchant lookup
+        // Assert — no API calls, no connection lookup
         verify(razorpayApiClient, never()).fetchPaymentStatus(any(), any(), any());
-        verify(merchantRepository, never()).findByConnectedGateway(any());
+        verify(connectionRepository, never()).findAll();
     }
 
     // ── Test 4: Razorpay API error is handled gracefully ──────────
@@ -208,13 +216,13 @@ class GatewayResolutionServiceTest {
     void razorpayApiError_transactionStaysInPenaltyAccruing() {
         String paymentId = "pay_TestError999";
         Transaction txn = buildPenaltyTransaction(paymentId, "razorpay");
-        Merchant merchant = buildMerchant();
+        MerchantGatewayConnection connection = buildRazorpayConnection();
 
         when(transactionRepository.findByStateAndSourceGateway(
                 TransactionState.PENALTY_ACCRUING, "razorpay"))
                 .thenReturn(List.of(txn));
-        when(merchantRepository.findByConnectedGateway("razorpay"))
-                .thenReturn(List.of(merchant));
+        when(connectionRepository.findAll())
+                .thenReturn(List.of(connection));
         when(encryptor.decrypt(ENCRYPTED_KEY)).thenReturn(DECRYPTED_KEY);
         when(encryptor.decrypt(ENCRYPTED_SECRET)).thenReturn(DECRYPTED_SECRET);
         when(razorpayApiClient.fetchPaymentStatus(DECRYPTED_KEY, DECRYPTED_SECRET, paymentId))
@@ -238,13 +246,13 @@ class GatewayResolutionServiceTest {
     void razorpayAlreadyRefunded_transitionsWithoutRefundCall() {
         String paymentId = "pay_TestRefunded000";
         Transaction txn = buildPenaltyTransaction(paymentId, "razorpay");
-        Merchant merchant = buildMerchant();
+        MerchantGatewayConnection connection = buildRazorpayConnection();
 
         when(transactionRepository.findByStateAndSourceGateway(
                 TransactionState.PENALTY_ACCRUING, "razorpay"))
                 .thenReturn(List.of(txn));
-        when(merchantRepository.findByConnectedGateway("razorpay"))
-                .thenReturn(List.of(merchant));
+        when(connectionRepository.findAll())
+                .thenReturn(List.of(connection));
         when(encryptor.decrypt(ENCRYPTED_KEY)).thenReturn(DECRYPTED_KEY);
         when(encryptor.decrypt(ENCRYPTED_SECRET)).thenReturn(DECRYPTED_SECRET);
         when(razorpayApiClient.fetchPaymentStatus(DECRYPTED_KEY, DECRYPTED_SECRET, paymentId))

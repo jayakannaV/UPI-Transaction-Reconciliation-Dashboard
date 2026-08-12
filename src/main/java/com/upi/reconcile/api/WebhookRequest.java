@@ -53,4 +53,10 @@ public class WebhookRequest {
      * webhook controllers when the merchant_id query param is present.
      */
     private UUID merchantId;
+
+    /**
+     * Optional — the specific gateway connection that produced this event.
+     * Set by connector webhook controllers when a connection lookup succeeds.
+     */
+    private UUID connectionId;
 }

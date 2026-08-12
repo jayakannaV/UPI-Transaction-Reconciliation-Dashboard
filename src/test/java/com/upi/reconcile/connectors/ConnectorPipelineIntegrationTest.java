@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.upi.reconcile.api.WebhookResponse;
 import com.upi.reconcile.connectors.crypto.HmacSignatureVerifier;
 import com.upi.reconcile.connectors.domain.Merchant;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnection;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnectionRepository;
 import com.upi.reconcile.connectors.domain.MerchantRepository;
 import com.upi.reconcile.domain.Bank;
 import com.upi.reconcile.domain.BankRepository;
@@ -104,6 +106,7 @@ class ConnectorPipelineIntegrationTest {
     @Autowired private BankRepository bankRepository;
     @Autowired private StateTransitionRepository stateTransitionRepository;
     @Autowired private MerchantRepository merchantRepository;
+    @Autowired private MerchantGatewayConnectionRepository connectionRepository;
     @Autowired private RedisTemplate<String, String> redisTemplate;
     @Autowired private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
     @Autowired private JwtTokenProvider jwtTokenProvider;
@@ -120,7 +123,7 @@ class ConnectorPipelineIntegrationTest {
     @BeforeEach
     void setUp() {
         // Clean all tables
-        jdbcTemplate.execute("TRUNCATE TABLE state_transitions, webhook_events, transactions, merchants CASCADE");
+        jdbcTemplate.execute("TRUNCATE TABLE state_transitions, webhook_events, transactions, merchant_gateway_connections, merchants CASCADE");
 
         // Flush Redis
         redisTemplate.getConnectionFactory().getConnection().serverCommands().flushAll();
@@ -147,23 +150,33 @@ class ConnectorPipelineIntegrationTest {
     }
 
     /**
-     * Creates a test merchant with a webhook secret for Razorpay signature tests.
+     * Creates a test merchant with an ACTIVE Razorpay connection and webhook secret.
      * Includes auth fields (email, password_hash) required by the V6 migration.
      */
     private UUID createTestMerchant() {
         UUID merchantId = UUID.randomUUID();
-        merchantRepository.save(Merchant.builder()
+        Merchant merchant = Merchant.builder()
                 .merchantId(merchantId)
                 .name("Test Merchant")
-                .connectedGateway("razorpay")
-                .encryptedApiKey("encrypted_key")
-                .encryptedApiSecret("encrypted_secret")
-                .webhookSecret(TEST_WEBHOOK_SECRET)
                 .email(TEST_MERCHANT_EMAIL)
                 .passwordHash(passwordEncoder.encode(TEST_MERCHANT_PASSWORD))
                 .businessName("Test Business")
                 .createdAt(OffsetDateTime.now())
+                .build();
+        merchantRepository.save(merchant);
+
+        // Create an ACTIVE Razorpay connection with the test webhook secret
+        connectionRepository.save(MerchantGatewayConnection.builder()
+                .connectionId(UUID.randomUUID())
+                .merchant(merchant)
+                .gateway("razorpay")
+                .encryptedApiKey("encrypted_key")
+                .encryptedApiSecret("encrypted_secret")
+                .webhookSecret(TEST_WEBHOOK_SECRET)
+                .status(MerchantGatewayConnection.STATUS_ACTIVE)
+                .connectedAt(OffsetDateTime.now())
                 .build());
+
         return merchantId;
     }
 
@@ -410,27 +423,36 @@ class ConnectorPipelineIntegrationTest {
     // ═══════════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("POST /api/merchants/connect stores encrypted credentials and returns webhook_url + webhook_secret")
-    void merchantConnect_storesEncryptedCredentials() throws Exception {
+    @DisplayName("POST /api/connections stores encrypted credentials and returns webhook_url + webhook_secret")
+    void connectionCreate_storesEncryptedCredentials() throws Exception {
 
-        // First create a merchant (simulates a signed-up merchant)
-        UUID merchantId = createTestMerchant();
-        String jwt = jwtFor(merchantId);
+        // Create a merchant without any connections
+        UUID merchantId = UUID.randomUUID();
+        Merchant merchant = Merchant.builder()
+                .merchantId(merchantId)
+                .name("Connect Test Merchant")
+                .email("connect-test@example.com")
+                .passwordHash(passwordEncoder.encode(TEST_MERCHANT_PASSWORD))
+                .businessName("Connect Test Business")
+                .createdAt(OffsetDateTime.now())
+                .build();
+        merchantRepository.save(merchant);
+
+        String jwt = jwtTokenProvider.generateToken(merchantId, "connect-test@example.com");
 
         Map<String, Object> connectRequest = new LinkedHashMap<>();
         connectRequest.put("gateway", "razorpay");
         connectRequest.put("apiKey", "rzp_test_1234567890");
         connectRequest.put("apiSecret", "secret_test_abcdef");
-        connectRequest.put("name", "Test Merchant");
 
         String json = objectMapper.writeValueAsString(connectRequest);
 
-        MvcResult result = mockMvc.perform(post("/api/merchants/connect")
+        MvcResult result = mockMvc.perform(post("/api/connections")
                         .header("Authorization", "Bearer " + jwt)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.merchantId").exists())
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.connectionId").exists())
                 .andExpect(jsonPath("$.webhookUrl").exists())
                 .andExpect(jsonPath("$.webhookSecret").exists())
                 .andReturn();
@@ -442,23 +464,21 @@ class ConnectorPipelineIntegrationTest {
         assertThat(webhookSecret).hasSize(64);
         assertThat(webhookSecret).matches("[0-9a-f]{64}");
 
-        // Verify merchant was updated (not created — connect updates an existing merchant)
-        assertThat(merchantRepository.count()).isEqualTo(1);
+        // Verify connection was created
+        var connections = connectionRepository.findByMerchant_MerchantId(merchantId);
+        assertThat(connections).hasSize(1);
 
-        // Verify credentials are encrypted (not plaintext)
-        var merchant = merchantRepository.findAll().get(0);
-        assertThat(merchant.getEncryptedApiKey()).isNotEqualTo("rzp_test_1234567890");
-        assertThat(merchant.getEncryptedApiSecret()).isNotEqualTo("secret_test_abcdef");
-        assertThat(merchant.getConnectedGateway()).isEqualTo("razorpay");
-        assertThat(merchant.getName()).isEqualTo("Test Merchant");
-
-        // Verify webhook_secret was stored on the entity and matches the response
-        assertThat(merchant.getWebhookSecret()).isEqualTo(webhookSecret);
+        var connection = connections.get(0);
+        assertThat(connection.getEncryptedApiKey()).isNotEqualTo("rzp_test_1234567890");
+        assertThat(connection.getEncryptedApiSecret()).isNotEqualTo("secret_test_abcdef");
+        assertThat(connection.getGateway()).isEqualTo("razorpay");
+        assertThat(connection.getStatus()).isEqualTo(MerchantGatewayConnection.STATUS_ACTIVE);
+        assertThat(connection.getWebhookSecret()).isEqualTo(webhookSecret);
     }
 
     @Test
-    @DisplayName("POST /api/merchants/connect without JWT → 401 Unauthorized")
-    void merchantConnect_withoutJwt_returns401() throws Exception {
+    @DisplayName("POST /api/connections without JWT → 401 Unauthorized")
+    void connectionCreate_withoutJwt_returns401() throws Exception {
 
         Map<String, Object> connectRequest = new LinkedHashMap<>();
         connectRequest.put("gateway", "razorpay");
@@ -467,7 +487,7 @@ class ConnectorPipelineIntegrationTest {
 
         String json = objectMapper.writeValueAsString(connectRequest);
 
-        mockMvc.perform(post("/api/merchants/connect")
+        mockMvc.perform(post("/api/connections")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isUnauthorized());

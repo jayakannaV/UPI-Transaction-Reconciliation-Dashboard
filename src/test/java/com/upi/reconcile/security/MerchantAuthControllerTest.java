@@ -2,6 +2,7 @@ package com.upi.reconcile.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.upi.reconcile.connectors.domain.Merchant;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnectionRepository;
 import com.upi.reconcile.connectors.domain.MerchantRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -16,6 +17,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.time.OffsetDateTime;
+import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -50,6 +52,9 @@ class MerchantAuthControllerTest {
 
     @MockitoBean
     private MerchantRepository merchantRepository;
+
+    @MockitoBean
+    private MerchantGatewayConnectionRepository connectionRepository;
 
     @MockitoBean
     private MerchantUserDetailsService merchantUserDetailsService;
@@ -111,9 +116,6 @@ class MerchantAuthControllerTest {
                 .email("merchant@example.com")
                 .passwordHash(correctHash)
                 .name("Test")
-                .connectedGateway("")
-                .encryptedApiKey("")
-                .encryptedApiSecret("")
                 .createdAt(OffsetDateTime.now())
                 .build();
 
@@ -142,9 +144,6 @@ class MerchantAuthControllerTest {
                 .email("merchant@example.com")
                 .passwordHash(correctHash)
                 .name("Test")
-                .connectedGateway("")
-                .encryptedApiKey("")
-                .encryptedApiSecret("")
                 .createdAt(OffsetDateTime.now())
                 .build();
 
@@ -185,14 +184,13 @@ class MerchantAuthControllerTest {
                 .merchantId(merchantId)
                 .email("me@example.com")
                 .businessName("My Shop")
-                .connectedGateway("razorpay")
                 .name("My Shop")
-                .encryptedApiKey("")
-                .encryptedApiSecret("")
                 .createdAt(OffsetDateTime.now())
                 .build();
 
         when(merchantRepository.findById(merchantId)).thenReturn(Optional.of(merchant));
+        when(connectionRepository.findByMerchant_MerchantId(merchantId))
+                .thenReturn(Collections.emptyList());
 
         mockMvc.perform(get("/api/auth/me")
                         .header("Authorization", "Bearer " + token))

@@ -9,6 +9,8 @@ import com.upi.reconcile.connectors.crypto.AesGcmEncryptor;
 import com.upi.reconcile.connectors.crypto.HmacSignatureVerifier;
 import com.upi.reconcile.connectors.crypto.PayuHashVerifier;
 import com.upi.reconcile.connectors.domain.Merchant;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnection;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnectionRepository;
 import com.upi.reconcile.connectors.domain.MerchantRepository;
 import com.upi.reconcile.ingestion.TransactionEventProducer;
 import com.upi.reconcile.ingestion.WebhookResultHolder;
@@ -35,14 +37,15 @@ import java.util.stream.Collectors;
  * {@link com.upi.reconcile.api.WebhookController}.
  *
  * <pre>
- * POST /api/connectors/razorpay/webhook?merchant_id=uuid   → RazorpayConnector (HMAC-SHA256 verified)
- * POST /api/connectors/payu/webhook?merchant_id=uuid        → PayUConnector      (SHA-512 hash verified)
- * POST /api/connectors/cashfree/webhook                     → CashfreeConnector  (stub — no signature)
+ * POST /api/connectors/razorpay/webhook?merchant_id=uuid&amp;connection_id=uuid   → RazorpayConnector (HMAC-SHA256 verified)
+ * POST /api/connectors/payu/webhook?merchant_id=uuid&amp;connection_id=uuid        → PayUConnector      (SHA-512 hash verified)
+ * POST /api/connectors/cashfree/webhook?merchant_id=uuid&amp;connection_id=uuid    → CashfreeConnector  (stub — no signature)
  * </pre>
  *
  * <p>
- * Flow: receive raw payload → (verify signature for Razorpay) → normalize
- * → register future → publish to Kafka → consumer processes → return result.
+ * Flow: receive raw payload → look up connection (reject 410 if DISCONNECTED)
+ * → (verify signature) → normalize → register future → publish to Kafka
+ * → consumer processes → return result.
  */
 @Slf4j
 @RestController
@@ -54,6 +57,7 @@ public class ConnectorWebhookController {
     private final WebhookResultHolder resultHolder;
     private final ObjectMapper objectMapper;
     private final MerchantRepository merchantRepository;
+    private final MerchantGatewayConnectionRepository connectionRepository;
     private final AesGcmEncryptor encryptor;
 
     public ConnectorWebhookController(List<PaymentGatewayConnector> connectors,
@@ -61,6 +65,7 @@ public class ConnectorWebhookController {
             WebhookResultHolder resultHolder,
             ObjectMapper objectMapper,
             MerchantRepository merchantRepository,
+            MerchantGatewayConnectionRepository connectionRepository,
             AesGcmEncryptor encryptor) {
         this.connectorMap = connectors.stream()
                 .collect(Collectors.toMap(PaymentGatewayConnector::gatewayName, Function.identity()));
@@ -68,6 +73,7 @@ public class ConnectorWebhookController {
         this.resultHolder = resultHolder;
         this.objectMapper = objectMapper;
         this.merchantRepository = merchantRepository;
+        this.connectionRepository = connectionRepository;
         this.encryptor = encryptor;
     }
 
@@ -83,22 +89,23 @@ public class ConnectorWebhookController {
      *
      * <p>
      * We look up the merchant by the {@code merchant_id} query parameter (which is
-     * embedded in the webhook URL returned during onboarding), retrieve their
-     * stored
-     * {@code webhook_secret}, and verify the HMAC. Requests with missing or invalid
-     * signatures are rejected with HTTP 401.
+     * embedded in the webhook URL returned during onboarding), retrieve the
+     * connection's {@code webhook_secret}, and verify the HMAC. Requests with
+     * missing or invalid signatures are rejected with HTTP 401.
      *
      * @param rawBody    the raw request body as a string (needed for HMAC
      *                   computation)
      * @param signature  the X-Razorpay-Signature header value
      * @param merchantId the merchant_id query parameter from the webhook URL
+     * @param connectionIdParam optional connection_id query parameter
      */
     @PostMapping("/razorpay/webhook")
     @SuppressWarnings("unchecked")
     public ResponseEntity<WebhookResponse> razorpayWebhook(
             @RequestBody String rawBody,
             @RequestHeader(value = "X-Razorpay-Signature", required = false) String signature,
-            @RequestParam(value = "merchant_id", required = false) String merchantId) throws Exception {
+            @RequestParam(value = "merchant_id", required = false) String merchantId,
+            @RequestParam(value = "connection_id", required = false) String connectionIdParam) throws Exception {
 
         // ── 1. Validate signature header is present ─────────────────
         if (signature == null || signature.isBlank()) {
@@ -106,7 +113,7 @@ public class ConnectorWebhookController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
-        // ── 2. Look up merchant and their webhook secret ────────────
+        // ── 2. Look up merchant ─────────────────────────────────────
         if (merchantId == null || merchantId.isBlank()) {
             log.warn("Razorpay webhook rejected — missing merchant_id query parameter");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
@@ -126,14 +133,28 @@ public class ConnectorWebhookController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
-        Merchant merchant = merchantOpt.get();
-        String webhookSecret = merchant.getWebhookSecret();
-        if (webhookSecret == null || webhookSecret.isBlank()) {
-            log.warn("Razorpay webhook rejected — merchant {} has no webhook_secret configured", merchantId);
+        // ── 3. Look up gateway connection and check status ──────────
+        MerchantGatewayConnection connection = resolveConnection(
+                merchantUuid, "razorpay", connectionIdParam);
+
+        if (connection == null) {
+            log.warn("Razorpay webhook rejected — no connection found for merchant {}", merchantId);
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
-        // ── 3. Verify HMAC-SHA256 signature ─────────────────────────
+        if (MerchantGatewayConnection.STATUS_DISCONNECTED.equals(connection.getStatus())) {
+            log.warn("Razorpay webhook rejected — connection {} is DISCONNECTED", connection.getConnectionId());
+            return ResponseEntity.status(HttpStatus.GONE).build();
+        }
+
+        String webhookSecret = connection.getWebhookSecret();
+        if (webhookSecret == null || webhookSecret.isBlank()) {
+            log.warn("Razorpay webhook rejected — connection {} has no webhook_secret configured",
+                    connection.getConnectionId());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        // ── 4. Verify HMAC-SHA256 signature ─────────────────────────
         if (!HmacSignatureVerifier.verify(rawBody, webhookSecret, signature)) {
             log.warn("Razorpay webhook rejected — HMAC-SHA256 signature mismatch for merchant {}", merchantId);
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
@@ -141,9 +162,9 @@ public class ConnectorWebhookController {
 
         log.info("Razorpay webhook signature verified for merchant {}", merchantId);
 
-        // ── 4. Deserialize and process normally ─────────────────────
+        // ── 5. Deserialize and process normally ─────────────────────
         Map<String, Object> rawPayload = objectMapper.readValue(rawBody, Map.class);
-        return processGatewayWebhook("razorpay", rawPayload, merchantUuid);
+        return processGatewayWebhook("razorpay", rawPayload, merchantUuid, connection.getConnectionId());
     }
 
     /**
@@ -162,11 +183,13 @@ public class ConnectorWebhookController {
      *
      * @param formParams the URL-decoded form fields from PayU's POST body
      * @param merchantId the merchant_id query param embedded in the webhook URL
+     * @param connectionIdParam optional connection_id query parameter
      */
     @PostMapping(value = "/payu/webhook", consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
     public ResponseEntity<WebhookResponse> payuWebhook(
             @RequestParam MultiValueMap<String, String> formParams,
-            @RequestParam(value = "merchant_id", required = false) String merchantId) throws Exception {
+            @RequestParam(value = "merchant_id", required = false) String merchantId,
+            @RequestParam(value = "connection_id", required = false) String connectionIdParam) throws Exception {
 
         // ── 1. Validate merchant_id is present ───────────────────────
         if (merchantId == null || merchantId.isBlank()) {
@@ -188,9 +211,21 @@ public class ConnectorWebhookController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
-        Merchant merchant = merchantOpt.get();
+        // ── 2. Look up gateway connection and check status ──────────
+        MerchantGatewayConnection connection = resolveConnection(
+                merchantUuid, "payu", connectionIdParam);
 
-        // ── 2. Extract hash and required fields for verification ─────
+        if (connection == null) {
+            log.warn("PayU webhook rejected — no connection found for merchant {}", merchantId);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+
+        if (MerchantGatewayConnection.STATUS_DISCONNECTED.equals(connection.getStatus())) {
+            log.warn("PayU webhook rejected — connection {} is DISCONNECTED", connection.getConnectionId());
+            return ResponseEntity.status(HttpStatus.GONE).build();
+        }
+
+        // ── 3. Extract hash and required fields for verification ─────
         String hash = formParams.getFirst("hash");
         if (hash == null || hash.isBlank()) {
             log.warn("PayU webhook rejected — missing 'hash' field for merchant {}", merchantId);
@@ -209,11 +244,11 @@ public class ConnectorWebhookController {
         String udf4 = nvlForm(formParams, "udf4");
         String udf5 = nvlForm(formParams, "udf5");
 
-        // Decrypt the merchant's key and salt for hash verification
-        String merchantKey = encryptor.decrypt(merchant.getEncryptedApiKey());
-        String merchantSalt = encryptor.decrypt(merchant.getEncryptedApiSecret());
+        // Decrypt the connection's key and salt for hash verification
+        String merchantKey = encryptor.decrypt(connection.getEncryptedApiKey());
+        String merchantSalt = encryptor.decrypt(connection.getEncryptedApiSecret());
 
-        // ── 3. Verify SHA-512 hash ───────────────────────────────────
+        // ── 4. Verify SHA-512 hash ───────────────────────────────────
         boolean hashValid = PayuHashVerifier.verify(
                 merchantKey, merchantSalt,
                 txnid, amount, productinfo,
@@ -231,12 +266,12 @@ public class ConnectorWebhookController {
         log.info("PayU webhook hash verified ✓ for merchant={}, txnid={}, status={}",
                 merchantId, txnid, status);
 
-        // ── 4. Build payload map (pass merchant_id for PayUConnector lookup) ──
+        // ── 5. Build payload map (pass merchant_id for PayUConnector lookup) ──
         Map<String, Object> rawPayload = new HashMap<>();
         formParams.forEach((key, values) -> rawPayload.put(key, values.isEmpty() ? "" : values.getFirst()));
         rawPayload.put("__merchant_id__", merchantId); // sentinel for connector
 
-        return processGatewayWebhook("payu", rawPayload, merchantUuid);
+        return processGatewayWebhook("payu", rawPayload, merchantUuid, connection.getConnectionId());
     }
 
     /**
@@ -247,9 +282,11 @@ public class ConnectorWebhookController {
     @PostMapping(value = "/payu/webhook", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<WebhookResponse> payuWebhookJson(
             @RequestBody Map<String, Object> rawPayload,
-            @RequestParam(value = "merchant_id", required = false) String merchantId) throws Exception {
+            @RequestParam(value = "merchant_id", required = false) String merchantId,
+            @RequestParam(value = "connection_id", required = false) String connectionIdParam) throws Exception {
 
         UUID payuMerchantUuid = null;
+        UUID payuConnectionId = null;
         if (merchantId != null && !merchantId.isBlank()) {
             rawPayload.put("__merchant_id__", merchantId);
             try {
@@ -258,7 +295,22 @@ public class ConnectorWebhookController {
                 // invalid UUID — proceed without merchant context
             }
         }
-        return processGatewayWebhook("payu", rawPayload, payuMerchantUuid);
+
+        // Look up connection for status check
+        if (payuMerchantUuid != null) {
+            MerchantGatewayConnection connection = resolveConnection(
+                    payuMerchantUuid, "payu", connectionIdParam);
+            if (connection != null) {
+                if (MerchantGatewayConnection.STATUS_DISCONNECTED.equals(connection.getStatus())) {
+                    log.warn("PayU JSON webhook rejected — connection {} is DISCONNECTED",
+                            connection.getConnectionId());
+                    return ResponseEntity.status(HttpStatus.GONE).build();
+                }
+                payuConnectionId = connection.getConnectionId();
+            }
+        }
+
+        return processGatewayWebhook("payu", rawPayload, payuMerchantUuid, payuConnectionId);
     }
 
     /** Extracts a form field value or returns empty string if absent. */
@@ -273,14 +325,75 @@ public class ConnectorWebhookController {
     @PostMapping("/cashfree/webhook")
     public ResponseEntity<WebhookResponse> cashfreeWebhook(
             @RequestBody Map<String, Object> rawPayload,
-            @RequestParam(value = "merchant_id", required = false) String merchantId) throws Exception {
+            @RequestParam(value = "merchant_id", required = false) String merchantId,
+            @RequestParam(value = "connection_id", required = false) String connectionIdParam) throws Exception {
+
         UUID cashfreeMerchantUuid = null;
+        UUID cashfreeConnectionId = null;
         if (merchantId != null && !merchantId.isBlank()) {
             try {
                 cashfreeMerchantUuid = UUID.fromString(merchantId);
             } catch (IllegalArgumentException ignored) { }
         }
-        return processGatewayWebhook("cashfree", rawPayload, cashfreeMerchantUuid);
+
+        // Look up connection for status check
+        if (cashfreeMerchantUuid != null) {
+            MerchantGatewayConnection connection = resolveConnection(
+                    cashfreeMerchantUuid, "cashfree", connectionIdParam);
+            if (connection != null) {
+                if (MerchantGatewayConnection.STATUS_DISCONNECTED.equals(connection.getStatus())) {
+                    log.warn("Cashfree webhook rejected — connection {} is DISCONNECTED",
+                            connection.getConnectionId());
+                    return ResponseEntity.status(HttpStatus.GONE).build();
+                }
+                cashfreeConnectionId = connection.getConnectionId();
+            }
+        }
+
+        return processGatewayWebhook("cashfree", rawPayload, cashfreeMerchantUuid, cashfreeConnectionId);
+    }
+
+    // ── Connection resolution ────────────────────────────────────
+
+    /**
+     * Resolves the gateway connection for a webhook request.
+     *
+     * <p>Prefers {@code connection_id} query param if present (direct lookup),
+     * otherwise falls back to {@code merchant_id + gateway} lookup.
+     *
+     * @return the connection, or null if not found
+     */
+    private MerchantGatewayConnection resolveConnection(
+            UUID merchantUuid, String gateway, String connectionIdParam) {
+
+        // Try direct connection_id lookup first
+        if (connectionIdParam != null && !connectionIdParam.isBlank()) {
+            try {
+                UUID connectionId = UUID.fromString(connectionIdParam);
+                Optional<MerchantGatewayConnection> conn = connectionRepository
+                        .findByConnectionIdAndMerchant_MerchantId(connectionId, merchantUuid);
+                if (conn.isPresent()) {
+                    return conn.get();
+                }
+            } catch (IllegalArgumentException ignored) {
+                // invalid UUID — fall through to merchant+gateway lookup
+            }
+        }
+
+        // Fallback: look up by merchant_id + gateway (any status)
+        // Try ACTIVE first, then any status
+        Optional<MerchantGatewayConnection> active = connectionRepository
+                .findByMerchant_MerchantIdAndGatewayAndStatus(
+                        merchantUuid, gateway, MerchantGatewayConnection.STATUS_ACTIVE);
+        if (active.isPresent()) {
+            return active.get();
+        }
+
+        // Check for DISCONNECTED (to return 410)
+        Optional<MerchantGatewayConnection> disconnected = connectionRepository
+                .findByMerchant_MerchantIdAndGatewayAndStatus(
+                        merchantUuid, gateway, MerchantGatewayConnection.STATUS_DISCONNECTED);
+        return disconnected.orElse(null);
     }
 
     /**
@@ -295,7 +408,8 @@ public class ConnectorWebhookController {
      * </ol>
      */
     private ResponseEntity<WebhookResponse> processGatewayWebhook(
-            String gatewayName, Map<String, Object> rawPayload, UUID merchantId) throws Exception {
+            String gatewayName, Map<String, Object> rawPayload,
+            UUID merchantId, UUID connectionId) throws Exception {
 
         PaymentGatewayConnector connector = connectorMap.get(gatewayName);
         if (connector == null) {
@@ -309,6 +423,7 @@ public class ConnectorWebhookController {
         WebhookRequest normalized = connector.normalizeWebhookPayload(rawPayload);
         normalized.setSourceGateway(gatewayName);
         normalized.setMerchantId(merchantId);
+        normalized.setConnectionId(connectionId);
 
         log.info("Normalized {} webhook — idempotency_key={}", gatewayName, normalized.getIdempotencyKey());
 

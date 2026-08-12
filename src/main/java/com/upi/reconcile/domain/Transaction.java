@@ -102,4 +102,11 @@ public class Transaction {
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "merchant_id")
     private Merchant merchantOwner;
+
+    /**
+     * The specific gateway connection that produced this transaction.
+     * Nullable for generic webhook transactions.
+     */
+    @Column(name = "connection_id")
+    private UUID connectionId;
 }

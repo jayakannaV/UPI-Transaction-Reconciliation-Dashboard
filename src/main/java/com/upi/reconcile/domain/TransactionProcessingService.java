@@ -63,7 +63,8 @@ public class TransactionProcessingService {
             String orderReference,
             String declineCode,
             String sourceGateway,
-            UUID merchantOwnerId) {
+            UUID merchantOwnerId,
+            UUID connectionId) {
 
         OffsetDateTime now = OffsetDateTime.now();
 
@@ -96,6 +97,7 @@ public class TransactionProcessingService {
                 .orderReference(orderReference)
                 .sourceGateway(sourceGateway)
                 .merchantOwner(merchantOwner)
+                .connectionId(connectionId)
                 .build();
         transactionRepository.save(txn);
 

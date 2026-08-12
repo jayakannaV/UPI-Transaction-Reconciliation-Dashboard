@@ -1,8 +1,8 @@
 package com.upi.reconcile.connectors;
 
 import com.upi.reconcile.connectors.crypto.AesGcmEncryptor;
-import com.upi.reconcile.connectors.domain.Merchant;
-import com.upi.reconcile.connectors.domain.MerchantRepository;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnection;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnectionRepository;
 import com.upi.reconcile.domain.StateTransition;
 import com.upi.reconcile.domain.StateTransitionRepository;
 import com.upi.reconcile.domain.StateMachine;
@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Gateway-driven resolution service for Razorpay-sourced transactions.
@@ -51,7 +52,7 @@ public class GatewayResolutionService {
 
     private final TransactionRepository transactionRepository;
     private final StateTransitionRepository stateTransitionRepository;
-    private final MerchantRepository merchantRepository;
+    private final MerchantGatewayConnectionRepository connectionRepository;
     private final RazorpayApiClient razorpayApiClient;
     private final AesGcmEncryptor encryptor;
     private final StateMachine stateMachine;
@@ -75,22 +76,23 @@ public class GatewayResolutionService {
         log.info("🔌 Gateway resolution sweep — {} Razorpay PENALTY_ACCRUING transactions",
                 razorpayPenalty.size());
 
-        // Look up Razorpay merchant credentials (use first connected merchant)
-        List<Merchant> merchants = merchantRepository.findByConnectedGateway("razorpay");
-        if (merchants.isEmpty()) {
-            log.warn("No Razorpay merchant found — skipping gateway resolution");
+        // Look up any ACTIVE Razorpay connection for API credentials
+        // (gateway resolution uses the first available active connection)
+        Optional<MerchantGatewayConnection> connOpt = findAnyActiveRazorpayConnection();
+        if (connOpt.isEmpty()) {
+            log.warn("No active Razorpay connection found — skipping gateway resolution");
             return;
         }
 
-        Merchant merchant = merchants.getFirst();
+        MerchantGatewayConnection connection = connOpt.get();
         String apiKey;
         String apiSecret;
         try {
-            apiKey = encryptor.decrypt(merchant.getEncryptedApiKey());
-            apiSecret = encryptor.decrypt(merchant.getEncryptedApiSecret());
+            apiKey = encryptor.decrypt(connection.getEncryptedApiKey());
+            apiSecret = encryptor.decrypt(connection.getEncryptedApiSecret());
         } catch (Exception e) {
-            log.error("Failed to decrypt Razorpay credentials for merchant {} — skipping",
-                    merchant.getMerchantId(), e);
+            log.error("Failed to decrypt Razorpay credentials for connection {} — skipping",
+                    connection.getConnectionId(), e);
             return;
         }
 
@@ -102,6 +104,18 @@ public class GatewayResolutionService {
                         txn.getTxnId(), txn.getIdempotencyKey(), e);
             }
         }
+    }
+
+    /**
+     * Finds any ACTIVE Razorpay connection across all merchants.
+     * Used for gateway-driven resolution where we need API credentials.
+     */
+    private Optional<MerchantGatewayConnection> findAnyActiveRazorpayConnection() {
+        // Query all connections and find the first active Razorpay one
+        return connectionRepository.findAll().stream()
+                .filter(c -> "razorpay".equals(c.getGateway()))
+                .filter(c -> MerchantGatewayConnection.STATUS_ACTIVE.equals(c.getStatus()))
+                .findFirst();
     }
 
     /**

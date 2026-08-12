@@ -111,11 +111,14 @@ public class TransactionEventConsumer {
                         UUID merchantOwnerId = json.has("merchantId") && !json.get("merchantId").isNull()
                                         ? UUID.fromString(json.get("merchantId").asText())
                                         : null;
+                        UUID connectionId = json.has("connectionId") && !json.get("connectionId").isNull()
+                                        ? UUID.fromString(json.get("connectionId").asText())
+                                        : null;
 
                         Transaction txn = transactionProcessingService.processNewTransaction(
                                         idempotencyKey, remitterBankId, beneficiaryBankId,
                                         amountInr, orderReference, declineCode, sourceGateway,
-                                        merchantOwnerId);
+                                        merchantOwnerId, connectionId);
 
                         // Mark in Redis for fast-path on subsequent duplicates
                         idempotencyService.markProcessed(idempotencyKey, txn.getTxnId().toString());
