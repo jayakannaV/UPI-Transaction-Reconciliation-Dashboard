@@ -269,7 +269,8 @@ public class BatchResolutionScheduler {
                 txn.getRemitterBank() != null ? txn.getRemitterBank().getBankId() : null,
                 txn.getBeneficiaryBank() != null ? txn.getBeneficiaryBank().getBankId() : null,
                 at,
-                txn.getMerchantOwner() != null ? txn.getMerchantOwner().getMerchantId() : null));
+                txn.getMerchantOwner() != null ? txn.getMerchantOwner().getMerchantId() : null,
+                txn.getConnectionId()));
 
         log.debug("Transition: {} → {} [{}] for txn {}", fromState, toState, reason, txn.getTxnId());
     }

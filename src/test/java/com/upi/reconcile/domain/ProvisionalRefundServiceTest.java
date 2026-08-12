@@ -237,7 +237,7 @@ class ProvisionalRefundServiceTest {
                                         this, TXN_ID,
                                         TransactionState.PENDING_RECONCILIATION,
                                         TransactionState.AUTO_REVERSED,
-                                        BigDecimal.ZERO, null, null, BASE_TIME, null);
+                                        BigDecimal.ZERO, null, null, BASE_TIME, null, null);
 
                         listener.onTransactionResolved(stateEvent);
 
@@ -264,7 +264,7 @@ class ProvisionalRefundServiceTest {
                                         this, TXN_ID,
                                         TransactionState.PENALTY_ACCRUING,
                                         TransactionState.RESOLVED_REFUNDED,
-                                        new BigDecimal("300.00"), null, null, BASE_TIME, null);
+                                        new BigDecimal("300.00"), null, null, BASE_TIME, null, null);
 
                         listener.onTransactionResolved(stateEvent);
 
@@ -280,7 +280,7 @@ class ProvisionalRefundServiceTest {
                                         this, TXN_ID,
                                         TransactionState.PENDING_RECONCILIATION,
                                         TransactionState.TAT_BREACHED,
-                                        BigDecimal.ZERO, null, null, BASE_TIME, null);
+                                        BigDecimal.ZERO, null, null, BASE_TIME, null, null);
 
                         listener.onTransactionResolved(stateEvent);
 

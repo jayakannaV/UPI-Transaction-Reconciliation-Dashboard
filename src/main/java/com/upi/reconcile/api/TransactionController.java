@@ -1,5 +1,7 @@
 package com.upi.reconcile.api;
 
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnection;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnectionRepository;
 import com.upi.reconcile.domain.ProvisionalRefund;
 import com.upi.reconcile.domain.ProvisionalRefundRepository;
 import com.upi.reconcile.domain.ProvisionalRefundService;
@@ -29,9 +31,13 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
  * Transaction query and action endpoints — ARCHITECTURE.md §7.
@@ -59,6 +65,7 @@ public class TransactionController {
         private final StateTransitionRepository stateTransitionRepository;
         private final ProvisionalRefundService provisionalRefundService;
         private final ProvisionalRefundRepository provisionalRefundRepository;
+        private final MerchantGatewayConnectionRepository connectionRepository;
 
         // ── GET /api/transactions ─────────────────────────────────────
 
@@ -85,8 +92,12 @@ public class TransactionController {
                 }
 
                 PageRequest pageable = PageRequest.of(page, PAGE_SIZE, Sort.by(Sort.Direction.DESC, "createdAt"));
-                Page<TransactionDto> result = transactionRepository.findAll(spec, pageable)
-                                .map(this::toDto);
+                Page<Transaction> txnPage = transactionRepository.findAll(spec, pageable);
+
+                // Batch-load connections for all transactions on this page (avoids N+1)
+                Map<UUID, MerchantGatewayConnection> connectionMap = batchLoadConnections(txnPage.getContent());
+
+                Page<TransactionDto> result = txnPage.map(txn -> toDto(txn, connectionMap));
 
                 return ResponseEntity.ok(result);
         }
@@ -210,7 +221,37 @@ public class TransactionController {
 
         // ── Mapping helpers ───────────────────────────────────────────
 
-        private TransactionDto toDto(Transaction txn) {
+        /**
+         * Batch-loads all {@link MerchantGatewayConnection}s referenced by the
+         * transactions on the current page. Returns a map keyed by connectionId.
+         */
+        private Map<UUID, MerchantGatewayConnection> batchLoadConnections(List<Transaction> transactions) {
+                List<UUID> connectionIds = transactions.stream()
+                                .map(Transaction::getConnectionId)
+                                .filter(Objects::nonNull)
+                                .distinct()
+                                .toList();
+                if (connectionIds.isEmpty()) {
+                        return Collections.emptyMap();
+                }
+                return connectionRepository.findAllById(connectionIds).stream()
+                                .collect(Collectors.toMap(
+                                                MerchantGatewayConnection::getConnectionId,
+                                                Function.identity()));
+        }
+
+        private TransactionDto toDto(Transaction txn, Map<UUID, MerchantGatewayConnection> connectionMap) {
+                // Resolve gateway + connection status from the connection map
+                String gateway = "simulated";
+                String connectionStatus = null;
+                if (txn.getConnectionId() != null) {
+                        MerchantGatewayConnection conn = connectionMap.get(txn.getConnectionId());
+                        if (conn != null) {
+                                gateway = conn.getGateway();
+                                connectionStatus = conn.getStatus();
+                        }
+                }
+
                 return TransactionDto.builder()
                                 .txnId(txn.getTxnId())
                                 .state(txn.getState().name())
@@ -235,6 +276,8 @@ public class TransactionController {
                                 .mlClassification(txn.getMlClassification())
                                 .mlConfidence(txn.getMlConfidence())
                                 .sourceGateway(txn.getSourceGateway())
+                                .gateway(gateway)
+                                .connectionStatus(connectionStatus)
                                 .build();
         }
 

@@ -30,6 +30,8 @@ public class TransactionStateChangedEvent extends ApplicationEvent {
     private final UUID beneficiaryBankId;
     private final OffsetDateTime transitionedAt;
     private final UUID merchantId;
+    /** Nullable — the gateway connection that produced this transaction. */
+    private final UUID connectionId;
 
     public TransactionStateChangedEvent(Object source,
             UUID txnId,
@@ -39,7 +41,8 @@ public class TransactionStateChangedEvent extends ApplicationEvent {
             UUID remitterBankId,
             UUID beneficiaryBankId,
             OffsetDateTime transitionedAt,
-            UUID merchantId) {
+            UUID merchantId,
+            UUID connectionId) {
         super(source);
         this.txnId = txnId;
         this.fromState = fromState;
@@ -49,5 +52,6 @@ public class TransactionStateChangedEvent extends ApplicationEvent {
         this.beneficiaryBankId = beneficiaryBankId;
         this.transitionedAt = transitionedAt;
         this.merchantId = merchantId;
+        this.connectionId = connectionId;
     }
 }

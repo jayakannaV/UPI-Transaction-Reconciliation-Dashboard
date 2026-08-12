@@ -1,6 +1,8 @@
 package com.upi.reconcile.api;
 
 import com.upi.reconcile.connectors.domain.Merchant;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnection;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnectionRepository;
 import com.upi.reconcile.domain.Bank;
 import com.upi.reconcile.domain.ProvisionalRefund;
 import com.upi.reconcile.domain.ProvisionalRefundRepository;
@@ -73,6 +75,9 @@ class TransactionControllerTest {
 
         @MockitoBean
         private ProvisionalRefundRepository provisionalRefundRepository;
+
+        @MockitoBean
+        private MerchantGatewayConnectionRepository connectionRepository;
 
         @MockitoBean
         private JwtTokenProvider jwtTokenProvider;
@@ -188,6 +193,54 @@ class TransactionControllerTest {
                                         .andExpect(status().isOk())
                                         .andExpect(jsonPath("$.content", hasSize(0)))
                                         .andExpect(jsonPath("$.totalElements").value(0));
+                }
+        }
+
+        // ── GET /api/transactions - Gateway Field Population ───────────
+
+        @Nested
+        @DisplayName("GET /api/transactions - Gateway Field Population")
+        class GatewayFieldPopulation {
+
+                @Test
+                @DisplayName("Populates gateway and status from connection for webhook transactions")
+                void populatesFromConnection() throws Exception {
+                        UUID connId = UUID.randomUUID();
+                        Transaction txn = sampleTransaction();
+                        txn.setConnectionId(connId);
+
+                        MerchantGatewayConnection conn = MerchantGatewayConnection.builder()
+                                        .connectionId(connId)
+                                        .gateway("razorpay")
+                                        .status("ACTIVE")
+                                        .build();
+
+                        when(transactionRepository.findAll(any(Specification.class), any(Pageable.class)))
+                                        .thenReturn(new PageImpl<>(List.of(txn)));
+                        when(connectionRepository.findAllById(List.of(connId)))
+                                        .thenReturn(List.of(conn));
+
+                        mockMvc.perform(get("/api/transactions"))
+                                        .andExpect(status().isOk())
+                                        .andExpect(jsonPath("$.content", hasSize(1)))
+                                        .andExpect(jsonPath("$.content[0].gateway").value("razorpay"))
+                                        .andExpect(jsonPath("$.content[0].connectionStatus").value("ACTIVE"));
+                }
+
+                @Test
+                @DisplayName("Defaults to simulated when connectionId is null")
+                void defaultsToSimulated() throws Exception {
+                        Transaction txn = sampleTransaction();
+                        txn.setConnectionId(null);
+
+                        when(transactionRepository.findAll(any(Specification.class), any(Pageable.class)))
+                                        .thenReturn(new PageImpl<>(List.of(txn)));
+
+                        mockMvc.perform(get("/api/transactions"))
+                                        .andExpect(status().isOk())
+                                        .andExpect(jsonPath("$.content", hasSize(1)))
+                                        .andExpect(jsonPath("$.content[0].gateway").value("simulated"))
+                                        .andExpect(jsonPath("$.content[0].connectionStatus").doesNotExist());
                 }
         }
 

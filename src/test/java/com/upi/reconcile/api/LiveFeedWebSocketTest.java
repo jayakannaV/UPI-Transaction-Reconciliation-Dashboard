@@ -1,5 +1,6 @@
 package com.upi.reconcile.api;
 
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnectionRepository;
 import com.upi.reconcile.domain.TransactionState;
 import com.upi.reconcile.domain.TransactionStateChangedEvent;
 import org.junit.jupiter.api.DisplayName;
@@ -26,7 +27,8 @@ import static org.mockito.Mockito.verify;
 class LiveFeedWebSocketTest {
 
         private final SimpMessagingTemplate messagingTemplate = mock(SimpMessagingTemplate.class);
-        private final LiveFeedWebSocketHandler handler = new LiveFeedWebSocketHandler(messagingTemplate);
+        private final MerchantGatewayConnectionRepository connectionRepository = mock(MerchantGatewayConnectionRepository.class);
+        private final LiveFeedWebSocketHandler handler = new LiveFeedWebSocketHandler(messagingTemplate, connectionRepository);
 
         private static final UUID TXN_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
         private static final UUID BANK_ID = UUID.fromString("22222222-2222-2222-2222-222222222222");
@@ -45,6 +47,7 @@ class LiveFeedWebSocketTest {
                                 BANK_ID,
                                 BENEFICIARY_ID,
                                 TIMESTAMP,
+                                null,
                                 null);
 
                 handler.onStateChange(event);
@@ -75,6 +78,7 @@ class LiveFeedWebSocketTest {
                                 BANK_ID,
                                 BENEFICIARY_ID,
                                 TIMESTAMP,
+                                null,
                                 null);
 
                 handler.onStateChange(event);
@@ -101,6 +105,7 @@ class LiveFeedWebSocketTest {
                                 BANK_ID,
                                 BENEFICIARY_ID,
                                 TIMESTAMP,
+                                null,
                                 null);
 
                 handler.onStateChange(event);

@@ -38,4 +38,10 @@ public class TransactionDto {
     private String mlClassification;
     private BigDecimal mlConfidence;
     private String sourceGateway;
+
+    /** Resolved gateway name from the connection ("razorpay"/"payu"/"cashfree") or "simulated". */
+    private String gateway;
+
+    /** Connection health at lookup time: "ACTIVE" / "DISCONNECTED", or null for simulated txns. */
+    private String connectionStatus;
 }

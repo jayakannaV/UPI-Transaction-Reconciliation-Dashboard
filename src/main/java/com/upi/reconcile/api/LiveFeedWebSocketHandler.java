@@ -1,5 +1,7 @@
 package com.upi.reconcile.api;
 
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnection;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnectionRepository;
 import com.upi.reconcile.domain.ProvisionalRefundRecoveredEvent;
 import com.upi.reconcile.domain.SystemicAnomalyEvent;
 import com.upi.reconcile.domain.TransactionStateChangedEvent;
@@ -11,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -37,16 +40,31 @@ import java.util.UUID;
 public class LiveFeedWebSocketHandler {
 
         private final SimpMessagingTemplate messagingTemplate;
+        private final MerchantGatewayConnectionRepository connectionRepository;
 
         @EventListener
         public void onStateChange(TransactionStateChangedEvent event) {
+                // Resolve gateway + connection status from the event's connectionId
+                String gateway = "simulated";
+                String connectionStatus = null;
+                if (event.getConnectionId() != null) {
+                        Optional<MerchantGatewayConnection> connOpt =
+                                        connectionRepository.findById(event.getConnectionId());
+                        if (connOpt.isPresent()) {
+                                gateway = connOpt.get().getGateway();
+                                connectionStatus = connOpt.get().getStatus();
+                        }
+                }
+
                 LiveFeedMessage message = new LiveFeedMessage(
                                 event.getTxnId(),
                                 event.getFromState() != null ? event.getFromState().name() : null,
                                 event.getToState().name(),
                                 event.getPenaltyAmountInr(),
                                 event.getRemitterBankId(),
-                                event.getTransitionedAt());
+                                event.getTransitionedAt(),
+                                gateway,
+                                connectionStatus);
 
                 // Route to per-merchant topic for tenant isolation
                 if (event.getMerchantId() != null) {
@@ -94,7 +112,9 @@ public class LiveFeedWebSocketHandler {
                         String newState,
                         BigDecimal penaltyAmountInr,
                         UUID bankId,
-                        OffsetDateTime timestamp) {
+                        OffsetDateTime timestamp,
+                        String gateway,
+                        String connectionStatus) {
         }
 
         /**
