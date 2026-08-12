@@ -18,6 +18,8 @@ export interface TransactionDto {
   mlClassification: string | null;
   mlConfidence: number | null;
   sourceGateway: string | null;
+  gateway?: string | null;
+  connectionStatus?: string | null;
 }
 
 export interface PageResponse<T> {

@@ -221,7 +221,6 @@ export function ConnectionsPage({ onConnected }: ConnectionsPageProps) {
               // Find if we have an active or disconnected connection for this gateway
               const activeConn = connections.find(c => c.gateway.toLowerCase() === gw.id && c.status === 'ACTIVE');
               const disconnectedConn = connections.find(c => c.gateway.toLowerCase() === gw.id && c.status === 'DISCONNECTED');
-              const currentConn = activeConn || disconnectedConn;
               const isConnected = !!activeConn;
 
               return (

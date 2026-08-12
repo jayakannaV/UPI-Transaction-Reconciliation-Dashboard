@@ -172,6 +172,18 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
                     {transaction.txnId}
                   </span>
                 </div>
+                {transaction.gateway && (
+                  <div className="detail-item">
+                    <span className="detail-item__label">Gateway</span>
+                    <span className="detail-item__value">
+                      <span className={`gateway-badge gateway-badge--${transaction.gateway.toLowerCase()} ${transaction.connectionStatus === 'DISCONNECTED' ? 'gateway-badge--disconnected' : ''}`}>
+                        <span className="gateway-badge__dot" />
+                        {transaction.gateway}
+                        {transaction.connectionStatus === 'DISCONNECTED' && ' (Disconnected)'}
+                      </span>
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* ── Complaint CTA ─────────────────────────── */}

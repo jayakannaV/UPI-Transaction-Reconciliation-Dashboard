@@ -26,6 +26,16 @@ export function TransactionRow({ transaction: txn, onClick }: TransactionRowProp
           <span className="txn-row__amount">{formatINR(txn.amountInr)}</span>
           <span className="txn-row__separator">•</span>
           <span className="txn-row__bank">{txn.remitterBankName ?? 'Unknown bank'}</span>
+          {txn.gateway && (
+            <>
+              <span className="txn-row__separator">•</span>
+              <span className={`gateway-badge gateway-badge--${txn.gateway.toLowerCase()} ${txn.connectionStatus === 'DISCONNECTED' ? 'gateway-badge--disconnected' : ''}`}>
+                <span className="gateway-badge__dot" />
+                {txn.gateway}
+                {txn.connectionStatus === 'DISCONNECTED' && ' (Disconnected)'}
+              </span>
+            </>
+          )}
         </div>
         <StateBadge state={txn.state} />
       </div>
