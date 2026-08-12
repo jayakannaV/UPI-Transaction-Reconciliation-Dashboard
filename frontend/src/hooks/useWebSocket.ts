@@ -11,6 +11,7 @@ import type {
   ProvisionalRefundRecoveredMessage,
 } from '../api/types';
 import { isAnomalyMessage, isRecoveryMessage } from '../api/types';
+import { useAuth } from '../contexts/AuthContext';
 
 export interface UseWebSocketReturn {
   status: ConnectionStatus;
@@ -31,8 +32,14 @@ export function useWebSocket(maxMessages = 100): UseWebSocketReturn {
   const [anomalies, setAnomalies] = useState<AnomalyMessage[]>([]);
   const [recoveryEvents, setRecoveryEvents] = useState<ProvisionalRefundRecoveredMessage[]>([]);
   const clientRef = useRef<Client | null>(null);
+  const { token } = useAuth();
 
   useEffect(() => {
+    if (!token) {
+      setStatus('disconnected');
+      return;
+    }
+
     const client = createWebSocketClient({
       onStatusChange: setStatus,
       onMessage: (msg: WebSocketMessage) => {
@@ -53,7 +60,8 @@ export function useWebSocket(maxMessages = 100): UseWebSocketReturn {
     return () => {
       client.deactivate();
     };
-  }, [maxMessages]);
+  }, [maxMessages, token]);
+
 
   const dismissAnomaly = useCallback((index: number) => {
     setAnomalies((prev) => prev.filter((_, i) => i !== index));

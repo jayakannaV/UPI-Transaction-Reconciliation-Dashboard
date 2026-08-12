@@ -34,7 +34,7 @@ function RecoveryToastItem({
   event: ProvisionalRefundRecoveredMessage;
   onDismiss: () => void;
 }) {
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     timerRef.current = setTimeout(onDismiss, 8000);

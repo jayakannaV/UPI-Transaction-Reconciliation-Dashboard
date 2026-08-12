@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { getProvisionalSummary } from '../api/merchants';
 import type { ProvisionalSummaryDto } from '../api/types';
-import { formatINR } from '../utils/format';
+
 
 interface ProvisionalSummaryCardProps {
   /** Number of live WS messages — used to trigger a debounced refresh */

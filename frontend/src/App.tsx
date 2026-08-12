@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useWebSocket } from './hooks/useWebSocket';
 import { HeroCounter } from './components/HeroCounter';
 import { AnomalyBanner } from './components/AnomalyBanner';
@@ -10,8 +11,17 @@ import { RecoveryToast } from './components/RecoveryToast';
 import { ProvisionalSummaryCard } from './components/ProvisionalSummaryCard';
 import { getTransactions } from './api/transactions';
 import type { TransactionDto, PageResponse } from './api/types';
+import { useAuth } from './contexts/AuthContext';
+import { Login } from './components/Login';
+import { Signup } from './components/Signup';
 
-type View = 'onboarding' | 'dashboard';
+// ProtectedRoute component
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { token, loading } = useAuth();
+  if (loading) return null;
+  if (!token) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+}
 
 function App() {
   const { status, liveMessages, anomalies, dismissAnomaly, recoveryEvents, dismissRecovery } = useWebSocket();
@@ -22,18 +32,18 @@ function App() {
     totalTxns: 0,
   });
 
-  // Determine initial view based on whether a gateway has been connected
-  const [view, setView] = useState<View>(() => {
-    return localStorage.getItem('gateway_connected') === 'true' ? 'dashboard' : 'onboarding';
-  });
+  const { token, logout } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const handleGatewayConnected = () => {
     localStorage.setItem('gateway_connected', 'true');
-    setView('dashboard');
+    navigate('/');
   };
 
   // Compute hero data from all RESOLVED_REFUNDED transactions
   const fetchHeroData = useCallback(async () => {
+    if (!token) return;
     try {
       // Get total count of all transactions
       const allTxns: PageResponse<TransactionDto> = await getTransactions({ page: 0 });
@@ -68,20 +78,20 @@ function App() {
     } catch (err) {
       console.error('Failed to compute hero data:', err);
     }
-  }, []);
+  }, [token]);
 
   useEffect(() => {
-    if (view === 'dashboard') {
+    if (location.pathname === '/' && token) {
       fetchHeroData();
     }
-  }, [fetchHeroData, view]);
+  }, [fetchHeroData, location.pathname, token]);
 
   // Refresh hero when new WS messages arrive (debounced)
   useEffect(() => {
-    if (liveMessages.length === 0 || view !== 'dashboard') return;
+    if (liveMessages.length === 0 || location.pathname !== '/' || !token) return;
     const timer = setTimeout(() => fetchHeroData(), 1500);
     return () => clearTimeout(timer);
-  }, [liveMessages.length, fetchHeroData, view]);
+  }, [liveMessages.length, fetchHeroData, location.pathname, token]);
 
   return (
     <div className="app-container">
@@ -95,78 +105,97 @@ function App() {
           </div>
         </div>
         <div className="app-header__nav">
-          {localStorage.getItem('gateway_connected') === 'true' && (
+          {token && localStorage.getItem('gateway_connected') === 'true' && (
             <>
               <button
-                className={`nav-link ${view === 'dashboard' ? 'nav-link--active' : ''}`}
-                onClick={() => setView('dashboard')}
+                className={`nav-link ${location.pathname === '/' ? 'nav-link--active' : ''}`}
+                onClick={() => navigate('/')}
               >
                 Dashboard
               </button>
               <button
-                className={`nav-link ${view === 'onboarding' ? 'nav-link--active' : ''}`}
-                onClick={() => setView('onboarding')}
+                className={`nav-link ${location.pathname === '/onboarding' ? 'nav-link--active' : ''}`}
+                onClick={() => navigate('/onboarding')}
               >
                 Connections
               </button>
             </>
           )}
-          <div className="app-header__status">
-            <span className={`status-dot ${status !== 'connected' ? 'status-dot--disconnected' : ''}`} />
-            {status === 'connected'
-              ? 'Live'
-              : status === 'connecting'
-              ? 'Connecting…'
-              : 'Disconnected'}
-          </div>
+          {token && (
+            <>
+              <div className="app-header__status">
+                <span className={`status-dot ${status !== 'connected' ? 'status-dot--disconnected' : ''}`} />
+                {status === 'connected'
+                  ? 'Live'
+                  : status === 'connecting'
+                  ? 'Connecting…'
+                  : 'Disconnected'}
+              </div>
+              <button
+                className="nav-link"
+                onClick={logout}
+                style={{ color: 'var(--danger)', marginLeft: '1rem' }}
+              >
+                Log out
+              </button>
+            </>
+          )}
         </div>
       </header>
 
-      {/* ── Onboarding View ─────────────────────────────── */}
-      {view === 'onboarding' && (
-        <GatewayOnboarding onConnected={handleGatewayConnected} />
-      )}
+      {/* ── Routes ─────────────────────────────── */}
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/signup" element={<Signup />} />
 
-      {/* ── Dashboard View (existing — untouched) ─────── */}
-      {view === 'dashboard' && (
-        <>
-          {/* ── Anomaly Banners ─────────────────────────────── */}
-          <AnomalyBanner anomalies={anomalies} onDismiss={dismissAnomaly} />
+        
+        <Route path="/onboarding" element={
+          <ProtectedRoute>
+            <GatewayOnboarding onConnected={handleGatewayConnected} />
+          </ProtectedRoute>
+        } />
+        
+        <Route path="/" element={
+          <ProtectedRoute>
+            {localStorage.getItem('gateway_connected') === 'true' ? (
+              <>
+                {/* ── Dashboard View ─────── */}
+                <AnomalyBanner anomalies={anomalies} onDismiss={dismissAnomaly} />
 
-          {/* ── Hero Counter ────────────────────────────────── */}
-          <HeroCounter
-            totalRecovered={heroData.totalRecovered}
-            totalPenaltyTransactions={heroData.totalPenaltyTxns}
-            totalTransactions={heroData.totalTxns}
-          />
+                <HeroCounter
+                  totalRecovered={heroData.totalRecovered}
+                  totalPenaltyTransactions={heroData.totalPenaltyTxns}
+                  totalTransactions={heroData.totalTxns}
+                />
 
-          {/* ── Provisional Recovery Summary ─────────────────── */}
-          <ProvisionalSummaryCard liveMessageCount={liveMessages.length} />
+                <ProvisionalSummaryCard liveMessageCount={liveMessages.length} />
 
-          {/* ── Main Grid: Feed + Scorecard ─────────────────── */}
-          <div className="main-grid">
-            <LiveFeed
-              liveMessages={liveMessages}
-              onSelectTransaction={setSelectedTxnId}
-            />
-            <BankScorecard liveMessages={liveMessages} />
-          </div>
+                <div className="main-grid">
+                  <LiveFeed
+                    liveMessages={liveMessages}
+                    onSelectTransaction={setSelectedTxnId}
+                  />
+                  <BankScorecard liveMessages={liveMessages} />
+                </div>
 
-          {/* ── Transaction Detail Drawer ───────────────────── */}
-          {selectedTxnId && (
-            <TransactionDetail
-              txnId={selectedTxnId}
-              onClose={() => setSelectedTxnId(null)}
-            />
-          )}
+                {selectedTxnId && (
+                  <TransactionDetail
+                    txnId={selectedTxnId}
+                    onClose={() => setSelectedTxnId(null)}
+                  />
+                )}
 
-          {/* ── Recovery Toast Notifications ──────────────────── */}
-          <RecoveryToast
-            recoveryEvents={recoveryEvents}
-            onDismiss={dismissRecovery}
-          />
-        </>
-      )}
+                <RecoveryToast
+                  recoveryEvents={recoveryEvents}
+                  onDismiss={dismissRecovery}
+                />
+              </>
+            ) : (
+              <Navigate to="/onboarding" replace />
+            )}
+          </ProtectedRoute>
+        } />
+      </Routes>
     </div>
   );
 }
