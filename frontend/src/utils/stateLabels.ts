@@ -62,7 +62,7 @@ const STATE_MAP: Record<string, StateDisplay> = {
     label: 'Bank missed the deadline',
     emoji: '🚨',
     variant: 'danger',
-    showComplaintAction: true,
+    showComplaintAction: false,
   },
   PENALTY_ACCRUING: {
     label: 'Payment stuck — bank owes you a refund',

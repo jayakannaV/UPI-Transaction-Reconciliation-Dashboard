@@ -1,4 +1,5 @@
 import { apiFetch } from './client';
+import type { ProvisionalSummaryDto } from './types';
 
 export interface MerchantConnectRequest {
   gateway: string;
@@ -24,4 +25,8 @@ export function connectMerchant(
 
 export function getConnectedGateways(): Promise<string[]> {
   return apiFetch<string[]>('/merchants/connected-gateways');
+}
+
+export function getProvisionalSummary(): Promise<ProvisionalSummaryDto> {
+  return apiFetch<ProvisionalSummaryDto>('/merchants/provisional-summary');
 }

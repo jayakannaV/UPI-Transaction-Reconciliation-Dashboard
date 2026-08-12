@@ -37,4 +37,5 @@ public class TransactionDto {
     private String orderReference;
     private String mlClassification;
     private BigDecimal mlConfidence;
+    private String sourceGateway;
 }

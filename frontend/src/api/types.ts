@@ -17,6 +17,7 @@ export interface TransactionDto {
   orderReference: string | null;
   mlClassification: string | null;
   mlConfidence: number | null;
+  sourceGateway: string | null;
 }
 
 export interface PageResponse<T> {
@@ -47,6 +48,21 @@ export interface BankScorecardDto {
   liveReliabilityScore: number;
 }
 
+/** Response from POST /api/transactions/{txnId}/provisional-refund */
+export interface ProvisionalRefundDto {
+  id: number;
+  txnId: string;
+  amountRefundedByMerchant: number;
+  refundedAt: string;
+  recoveryStatus: string;
+}
+
+/** Response from GET /api/merchants/provisional-summary */
+export interface ProvisionalSummaryDto {
+  total_pending_recovery: number;
+  count: number;
+}
+
 /** WebSocket: state transition message */
 export interface LiveFeedMessage {
   txnId: string;
@@ -68,8 +84,21 @@ export interface AnomalyMessage {
   timestamp: string;
 }
 
-export type WebSocketMessage = LiveFeedMessage | AnomalyMessage;
+/** WebSocket: provisional refund recovered event */
+export interface ProvisionalRefundRecoveredMessage {
+  eventType: 'PROVISIONAL_REFUND_RECOVERED';
+  provisionalRefundId: number;
+  txnId: string;
+  amountRecovered: number;
+  timestamp: string;
+}
+
+export type WebSocketMessage = LiveFeedMessage | AnomalyMessage | ProvisionalRefundRecoveredMessage;
 
 export function isAnomalyMessage(msg: WebSocketMessage): msg is AnomalyMessage {
   return 'eventType' in msg && msg.eventType === 'ANOMALY_FLAGGED';
+}
+
+export function isRecoveryMessage(msg: WebSocketMessage): msg is ProvisionalRefundRecoveredMessage {
+  return 'eventType' in msg && msg.eventType === 'PROVISIONAL_REFUND_RECOVERED';
 }

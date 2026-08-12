@@ -1,6 +1,8 @@
 package com.upi.reconcile.domain;
 
 import com.upi.reconcile.config.TimeCompressionConfig;
+import com.upi.reconcile.connectors.domain.Merchant;
+import com.upi.reconcile.connectors.domain.MerchantRepository;
 import com.upi.reconcile.ml.MlClassificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -15,14 +17,15 @@ import java.util.UUID;
 /**
  * Orchestrates the full transactional flow for a new webhook event:
  * <ol>
- *   <li>Create {@link Transaction} in state {@code INITIATED}</li>
- *   <li>Record the initial {@link StateTransition} (null → INITIATED)</li>
- *   <li>Interpret the {@code decline_code} to determine the first event</li>
- *   <li>Run the {@link StateMachine} to compute the next state</li>
- *   <li>Record the second {@link StateTransition} (INITIATED → next state)</li>
+ * <li>Create {@link Transaction} in state {@code INITIATED}</li>
+ * <li>Record the initial {@link StateTransition} (null → INITIATED)</li>
+ * <li>Interpret the {@code decline_code} to determine the first event</li>
+ * <li>Run the {@link StateMachine} to compute the next state</li>
+ * <li>Record the second {@link StateTransition} (INITIATED → next state)</li>
  * </ol>
  *
- * <p>The entire method runs inside a single DB transaction so that on failure
+ * <p>
+ * The entire method runs inside a single DB transaction so that on failure
  * nothing is partially committed — Kafka consumer will redeliver and the
  * idempotency check will prevent duplicates.
  */
@@ -45,6 +48,7 @@ public class TransactionProcessingService {
     private final StateMachine stateMachine;
     private final TimeCompressionConfig timeConfig;
     private final MlClassificationService mlClassificationService;
+    private final MerchantRepository merchantRepository;
 
     /**
      * Process a brand-new webhook event end-to-end.
@@ -53,12 +57,13 @@ public class TransactionProcessingService {
      */
     @Transactional
     public Transaction processNewTransaction(String idempotencyKey,
-                                             UUID remitterBankId,
-                                             UUID beneficiaryBankId,
-                                             BigDecimal amountInr,
-                                             String orderReference,
-                                             String declineCode,
-                                             String sourceGateway) {
+            UUID remitterBankId,
+            UUID beneficiaryBankId,
+            BigDecimal amountInr,
+            String orderReference,
+            String declineCode,
+            String sourceGateway,
+            UUID merchantOwnerId) {
 
         OffsetDateTime now = OffsetDateTime.now();
 
@@ -69,6 +74,12 @@ public class TransactionProcessingService {
         Bank beneficiary = bankRepository.findById(beneficiaryBankId)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Unknown beneficiary bank: " + beneficiaryBankId));
+
+        // Look up owning merchant (nullable for generic webhooks)
+        Merchant merchantOwner = null;
+        if (merchantOwnerId != null) {
+            merchantOwner = merchantRepository.findById(merchantOwnerId).orElse(null);
+        }
 
         // 1. Create Transaction in INITIATED state
         Transaction txn = Transaction.builder()
@@ -84,6 +95,7 @@ public class TransactionProcessingService {
                 .declineCode(declineCode)
                 .orderReference(orderReference)
                 .sourceGateway(sourceGateway)
+                .merchantOwner(merchantOwner)
                 .build();
         transactionRepository.save(txn);
 
@@ -145,10 +157,10 @@ public class TransactionProcessingService {
     }
 
     private void recordTransition(Transaction txn,
-                                  TransactionState from,
-                                  TransactionState to,
-                                  String reason,
-                                  OffsetDateTime at) {
+            TransactionState from,
+            TransactionState to,
+            String reason,
+            OffsetDateTime at) {
         StateTransition st = StateTransition.builder()
                 .transaction(txn)
                 .fromState(from != null ? from.name() : null)

@@ -6,13 +6,15 @@ import { LiveFeed } from './components/LiveFeed';
 import { BankScorecard } from './components/BankScorecard';
 import { TransactionDetail } from './components/TransactionDetail';
 import { GatewayOnboarding } from './components/GatewayOnboarding';
+import { RecoveryToast } from './components/RecoveryToast';
+import { ProvisionalSummaryCard } from './components/ProvisionalSummaryCard';
 import { getTransactions } from './api/transactions';
 import type { TransactionDto, PageResponse } from './api/types';
 
 type View = 'onboarding' | 'dashboard';
 
 function App() {
-  const { status, liveMessages, anomalies, dismissAnomaly } = useWebSocket();
+  const { status, liveMessages, anomalies, dismissAnomaly, recoveryEvents, dismissRecovery } = useWebSocket();
   const [selectedTxnId, setSelectedTxnId] = useState<string | null>(null);
   const [heroData, setHeroData] = useState({
     totalRecovered: 0,
@@ -138,6 +140,9 @@ function App() {
             totalTransactions={heroData.totalTxns}
           />
 
+          {/* ── Provisional Recovery Summary ─────────────────── */}
+          <ProvisionalSummaryCard liveMessageCount={liveMessages.length} />
+
           {/* ── Main Grid: Feed + Scorecard ─────────────────── */}
           <div className="main-grid">
             <LiveFeed
@@ -154,6 +159,12 @@ function App() {
               onClose={() => setSelectedTxnId(null)}
             />
           )}
+
+          {/* ── Recovery Toast Notifications ──────────────────── */}
+          <RecoveryToast
+            recoveryEvents={recoveryEvents}
+            onDismiss={dismissRecovery}
+          />
         </>
       )}
     </div>

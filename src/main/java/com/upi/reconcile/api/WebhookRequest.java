@@ -42,6 +42,15 @@ public class WebhookRequest {
     /** Optional — if present, maps to a BD or TD decline code. */
     private String declineCode;
 
-    /** Optional — which payment gateway connector produced this event (razorpay, payu, cashfree). */
+    /**
+     * Optional — which payment gateway connector produced this event (razorpay,
+     * payu, cashfree).
+     */
     private String sourceGateway;
+
+    /**
+     * Optional — the merchant who owns this transaction. Set by connector
+     * webhook controllers when the merchant_id query param is present.
+     */
+    private UUID merchantId;
 }

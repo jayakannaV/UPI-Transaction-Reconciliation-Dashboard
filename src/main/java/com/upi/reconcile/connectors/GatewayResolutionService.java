@@ -23,20 +23,24 @@ import java.util.List;
 /**
  * Gateway-driven resolution service for Razorpay-sourced transactions.
  *
- * <p>When a transaction sourced from Razorpay enters {@code PENALTY_ACCRUING},
+ * <p>
+ * When a transaction sourced from Razorpay enters {@code PENALTY_ACCRUING},
  * this service calls Razorpay's real API to determine the true payment status
  * and takes corrective action:
  *
  * <ul>
- *   <li>If Razorpay says {@code captured} → transition to {@code SUCCESS}
- *       (auto-corrected via gateway status check)</li>
- *   <li>If Razorpay says {@code failed}/{@code created}/{@code authorized} →
- *       initiate refund via API, then transition to {@code RESOLVED_REFUNDED}</li>
- *   <li>If Razorpay says {@code refunded} → transition to {@code RESOLVED_REFUNDED}
- *       (already refunded)</li>
+ * <li>If Razorpay says {@code captured} → transition to {@code SUCCESS}
+ * (auto-corrected via gateway status check)</li>
+ * <li>If Razorpay says {@code failed}/{@code created}/{@code authorized} →
+ * initiate refund via API, then transition to {@code RESOLVED_REFUNDED}</li>
+ * <li>If Razorpay says {@code refunded} → transition to
+ * {@code RESOLVED_REFUNDED}
+ * (already refunded)</li>
  * </ul>
  *
- * <p>This is invoked from {@link com.upi.reconcile.scheduler.BatchResolutionScheduler}
+ * <p>
+ * This is invoked from
+ * {@link com.upi.reconcile.scheduler.BatchResolutionScheduler}
  * as a new sweep that runs <em>before</em> the simulated NPCI batch resolution,
  * ensuring Razorpay transactions get real API-driven resolution.
  */
@@ -104,11 +108,10 @@ public class GatewayResolutionService {
      * Resolves a single Razorpay transaction by checking its real payment status.
      */
     private void resolveOneTransaction(Transaction txn, String apiKey, String apiSecret,
-                                        OffsetDateTime now) {
+            OffsetDateTime now) {
         String paymentId = txn.getIdempotencyKey(); // idempotency_key = Razorpay payment_id
 
-        RazorpayApiClient.PaymentStatus status =
-                razorpayApiClient.fetchPaymentStatus(apiKey, apiSecret, paymentId);
+        RazorpayApiClient.PaymentStatus status = razorpayApiClient.fetchPaymentStatus(apiKey, apiSecret, paymentId);
 
         switch (status.status()) {
             case "captured" -> {
@@ -136,12 +139,13 @@ public class GatewayResolutionService {
             case "failed", "created", "authorized" -> {
                 // Payment genuinely failed or never completed — initiate refund
                 try {
-                    RazorpayApiClient.RefundResult refund =
-                            razorpayApiClient.initiateRefund(apiKey, apiSecret, paymentId);
+                    RazorpayApiClient.RefundResult refund = razorpayApiClient.initiateRefund(apiKey, apiSecret,
+                            paymentId);
 
                     applyTransition(txn, TransactionEvent.GATEWAY_REFUND_COMPLETED,
                             String.format("Auto-refunded via Razorpay API — refund_id: %s, status: %s",
-                                    refund.refundId(), refund.status()), now);
+                                    refund.refundId(), refund.status()),
+                            now);
                     txn.setResolvedAt(now);
                     transactionRepository.save(txn);
 
@@ -162,7 +166,7 @@ public class GatewayResolutionService {
      * Applies a state transition, records audit trail, and publishes event.
      */
     private void applyTransition(Transaction txn, TransactionEvent event,
-                                  String reason, OffsetDateTime at) {
+            String reason, OffsetDateTime at) {
         TransactionState fromState = txn.getState();
         TransactionState toState = stateMachine.transition(fromState, event);
 
@@ -186,7 +190,8 @@ public class GatewayResolutionService {
                 txn.getPenaltyAmountInr(),
                 txn.getRemitterBank() != null ? txn.getRemitterBank().getBankId() : null,
                 txn.getBeneficiaryBank() != null ? txn.getBeneficiaryBank().getBankId() : null,
-                at));
+                at,
+                txn.getMerchantOwner() != null ? txn.getMerchantOwner().getMerchantId() : null));
 
         log.debug("Transition: {} → {} [{}] for txn {}", fromState, toState, reason, txn.getTxnId());
     }

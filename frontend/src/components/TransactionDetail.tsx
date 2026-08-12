@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { TransactionDto, StateTransitionDto } from '../api/types';
-import { getTransactions, getTransactionHistory, generateComplaint } from '../api/transactions';
+import { getTransactions, getTransactionHistory, generateComplaint, createProvisionalRefund } from '../api/transactions';
 import { StateBadge } from './StateBadge';
 import { ComplaintModal } from './ComplaintModal';
 import { formatINR, formatDateTime, shortId } from '../utils/format';
@@ -17,6 +17,9 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
   const [loading, setLoading] = useState(true);
   const [complaintText, setComplaintText] = useState<string | null>(null);
   const [generatingComplaint, setGeneratingComplaint] = useState(false);
+  const [refundLoading, setRefundLoading] = useState(false);
+  const [refundSuccess, setRefundSuccess] = useState(false);
+  const [refundError, setRefundError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -53,7 +56,33 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
 
   const showComplaintCTA = transaction
     ? getStateDisplay(transaction.state).showComplaintAction
+        && !transaction.sourceGateway
     : false;
+
+  const isGatewayResolved = transaction
+    ? !!transaction.sourceGateway
+        && ['PENALTY_ACCRUING', 'ESCALATED'].includes(transaction.state)
+    : false;
+
+  const REFUND_ELIGIBLE_STATES = ['DEEMED_APPROVED', 'PENDING_RECONCILIATION', 'PENALTY_ACCRUING'];
+  const showRefundCTA = transaction
+    ? REFUND_ELIGIBLE_STATES.includes(transaction.state) && !refundSuccess
+    : false;
+
+  const handleProvisionalRefund = async () => {
+    if (!transaction) return;
+    try {
+      setRefundLoading(true);
+      setRefundError(null);
+      await createProvisionalRefund(transaction.txnId, transaction.amountInr);
+      setRefundSuccess(true);
+    } catch (err: any) {
+      console.error('Failed to create provisional refund:', err);
+      setRefundError(err?.message ?? 'Failed to track refund. Please try again.');
+    } finally {
+      setRefundLoading(false);
+    }
+  };
 
   return (
     <>
@@ -161,6 +190,49 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
                     <>📋 Generate RBI Complaint</>
                   )}
                 </button>
+              )}
+
+              {/* ── Gateway auto-resolved badge ──────────── */}
+              {isGatewayResolved && (
+                <div className="gateway-resolved-banner" id="gateway-resolved-badge">
+                  <span className="gateway-resolved-banner__icon">⚡</span>
+                  <span>
+                    Auto-resolved via gateway ({transaction.sourceGateway}) — no complaint applicable
+                  </span>
+                </div>
+              )}
+
+              {/* ── Provisional Refund CTA ────────────────── */}
+              {showRefundCTA && (
+                <button
+                  className="btn-primary btn-primary--recovery btn-primary--full"
+                  onClick={handleProvisionalRefund}
+                  disabled={refundLoading}
+                >
+                  {refundLoading ? (
+                    <>
+                      <span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />
+                      Tracking...
+                    </>
+                  ) : (
+                    <>💸 I refunded the customer myself — track this as pending recovery</>
+                  )}
+                </button>
+              )}
+              {refundSuccess && (
+                <div className="refund-success-banner">
+                  <span className="refund-success-banner__icon">✅</span>
+                  <span>
+                    Recorded! We're tracking {formatINR(transaction?.amountInr ?? 0)} as
+                    fronted by you — you'll be notified when the bank settles.
+                  </span>
+                </div>
+              )}
+              {refundError && (
+                <div className="refund-error-banner">
+                  <span className="refund-error-banner__icon">⚠️</span>
+                  <span>{refundError}</span>
+                </div>
               )}
 
               {/* ── State History Timeline ────────────────── */}

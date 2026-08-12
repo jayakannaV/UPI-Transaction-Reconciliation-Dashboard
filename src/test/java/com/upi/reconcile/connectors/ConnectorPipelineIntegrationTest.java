@@ -11,6 +11,7 @@ import com.upi.reconcile.domain.StateTransitionRepository;
 import com.upi.reconcile.domain.Transaction;
 import com.upi.reconcile.domain.TransactionRepository;
 import com.upi.reconcile.domain.WebhookEventRepository;
+import com.upi.reconcile.security.JwtTokenProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,6 +20,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.MediaType;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -104,12 +106,16 @@ class ConnectorPipelineIntegrationTest {
     @Autowired private MerchantRepository merchantRepository;
     @Autowired private RedisTemplate<String, String> redisTemplate;
     @Autowired private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+    @Autowired private JwtTokenProvider jwtTokenProvider;
+    @Autowired private PasswordEncoder passwordEncoder;
 
     // ── Test fixtures ─────────────────────────────────────────────
 
     private static final UUID REMITTER_BANK_ID = UUID.fromString("00000000-0000-0000-0000-000000000001");
     private static final UUID BENEFICIARY_BANK_ID = UUID.fromString("00000000-0000-0000-0000-000000000002");
     private static final String TEST_WEBHOOK_SECRET = "whsec_test_secret_for_hmac_verification";
+    private static final String TEST_MERCHANT_EMAIL = "integration-test@example.com";
+    private static final String TEST_MERCHANT_PASSWORD = "testPassword123";
 
     @BeforeEach
     void setUp() {
@@ -142,6 +148,7 @@ class ConnectorPipelineIntegrationTest {
 
     /**
      * Creates a test merchant with a webhook secret for Razorpay signature tests.
+     * Includes auth fields (email, password_hash) required by the V6 migration.
      */
     private UUID createTestMerchant() {
         UUID merchantId = UUID.randomUUID();
@@ -152,9 +159,20 @@ class ConnectorPipelineIntegrationTest {
                 .encryptedApiKey("encrypted_key")
                 .encryptedApiSecret("encrypted_secret")
                 .webhookSecret(TEST_WEBHOOK_SECRET)
+                .email(TEST_MERCHANT_EMAIL)
+                .passwordHash(passwordEncoder.encode(TEST_MERCHANT_PASSWORD))
+                .businessName("Test Business")
                 .createdAt(OffsetDateTime.now())
                 .build());
         return merchantId;
+    }
+
+    /**
+     * Generates a JWT for the given merchant, suitable for use as
+     * {@code Authorization: Bearer <token>} in authenticated requests.
+     */
+    private String jwtFor(UUID merchantId) {
+        return jwtTokenProvider.generateToken(merchantId, TEST_MERCHANT_EMAIL);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -388,12 +406,16 @@ class ConnectorPipelineIntegrationTest {
     }
 
     // ═══════════════════════════════════════════════════════════════
-    // Merchant connect
+    // Merchant connect — requires JWT authentication
     // ═══════════════════════════════════════════════════════════════
 
     @Test
     @DisplayName("POST /api/merchants/connect stores encrypted credentials and returns webhook_url + webhook_secret")
     void merchantConnect_storesEncryptedCredentials() throws Exception {
+
+        // First create a merchant (simulates a signed-up merchant)
+        UUID merchantId = createTestMerchant();
+        String jwt = jwtFor(merchantId);
 
         Map<String, Object> connectRequest = new LinkedHashMap<>();
         connectRequest.put("gateway", "razorpay");
@@ -404,6 +426,7 @@ class ConnectorPipelineIntegrationTest {
         String json = objectMapper.writeValueAsString(connectRequest);
 
         MvcResult result = mockMvc.perform(post("/api/merchants/connect")
+                        .header("Authorization", "Bearer " + jwt)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isOk())
@@ -419,7 +442,7 @@ class ConnectorPipelineIntegrationTest {
         assertThat(webhookSecret).hasSize(64);
         assertThat(webhookSecret).matches("[0-9a-f]{64}");
 
-        // Verify merchant was persisted
+        // Verify merchant was updated (not created — connect updates an existing merchant)
         assertThat(merchantRepository.count()).isEqualTo(1);
 
         // Verify credentials are encrypted (not plaintext)
@@ -431,6 +454,23 @@ class ConnectorPipelineIntegrationTest {
 
         // Verify webhook_secret was stored on the entity and matches the response
         assertThat(merchant.getWebhookSecret()).isEqualTo(webhookSecret);
+    }
+
+    @Test
+    @DisplayName("POST /api/merchants/connect without JWT → 401 Unauthorized")
+    void merchantConnect_withoutJwt_returns401() throws Exception {
+
+        Map<String, Object> connectRequest = new LinkedHashMap<>();
+        connectRequest.put("gateway", "razorpay");
+        connectRequest.put("apiKey", "rzp_test_1234567890");
+        connectRequest.put("apiSecret", "secret_test_abcdef");
+
+        String json = objectMapper.writeValueAsString(connectRequest);
+
+        mockMvc.perform(post("/api/merchants/connect")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json))
+                .andExpect(status().isUnauthorized());
     }
 
     // ═══════════════════════════════════════════════════════════════

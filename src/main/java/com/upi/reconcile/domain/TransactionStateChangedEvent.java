@@ -11,10 +11,12 @@ import java.util.UUID;
  * Published on every transaction state change so downstream listeners
  * (e.g. WebSocket broadcast) can react without coupling to the scheduler.
  *
- * <p>Carries the full context needed for the {@code /ws/live-feed} payload
+ * <p>
+ * Carries the full context needed for the {@code /ws/live-feed} payload
  * defined in ARCHITECTURE.md §7:
+ * 
  * <pre>
- *   { txn_id, old_state, new_state, penalty_amount_inr, bank_id }
+ * { txn_id, old_state, new_state, penalty_amount_inr, bank_id, merchant_id }
  * </pre>
  */
 @Getter
@@ -27,15 +29,17 @@ public class TransactionStateChangedEvent extends ApplicationEvent {
     private final UUID remitterBankId;
     private final UUID beneficiaryBankId;
     private final OffsetDateTime transitionedAt;
+    private final UUID merchantId;
 
     public TransactionStateChangedEvent(Object source,
-                                        UUID txnId,
-                                        TransactionState fromState,
-                                        TransactionState toState,
-                                        BigDecimal penaltyAmountInr,
-                                        UUID remitterBankId,
-                                        UUID beneficiaryBankId,
-                                        OffsetDateTime transitionedAt) {
+            UUID txnId,
+            TransactionState fromState,
+            TransactionState toState,
+            BigDecimal penaltyAmountInr,
+            UUID remitterBankId,
+            UUID beneficiaryBankId,
+            OffsetDateTime transitionedAt,
+            UUID merchantId) {
         super(source);
         this.txnId = txnId;
         this.fromState = fromState;
@@ -44,5 +48,6 @@ public class TransactionStateChangedEvent extends ApplicationEvent {
         this.remitterBankId = remitterBankId;
         this.beneficiaryBankId = beneficiaryBankId;
         this.transitionedAt = transitionedAt;
+        this.merchantId = merchantId;
     }
 }

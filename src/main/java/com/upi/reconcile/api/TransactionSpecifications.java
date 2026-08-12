@@ -31,7 +31,14 @@ public final class TransactionSpecifications {
     public static Specification<Transaction> involvesBankId(UUID bankId) {
         return (root, query, cb) -> cb.or(
                 cb.equal(root.get("remitterBank").get("bankId"), bankId),
-                cb.equal(root.get("beneficiaryBank").get("bankId"), bankId)
-        );
+                cb.equal(root.get("beneficiaryBank").get("bankId"), bankId));
+    }
+
+    /**
+     * Filters transactions belonging to a specific merchant (tenant isolation).
+     */
+    public static Specification<Transaction> belongsToMerchant(UUID merchantId) {
+        return (root, query, cb) ->
+                cb.equal(root.get("merchantOwner").get("merchantId"), merchantId);
     }
 }

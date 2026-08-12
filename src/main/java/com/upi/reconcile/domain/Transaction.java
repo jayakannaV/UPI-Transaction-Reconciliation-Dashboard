@@ -1,5 +1,7 @@
 package com.upi.reconcile.domain;
 
+import com.upi.reconcile.connectors.domain.Merchant;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -75,7 +77,10 @@ public class Transaction {
     @Column(name = "order_reference")
     private String orderReference;
 
-    /** ML classifier prediction: stuck_payment | wrong_amount | duplicate_charge | no_mismatch */
+    /**
+     * ML classifier prediction: stuck_payment | wrong_amount | duplicate_charge |
+     * no_mismatch
+     */
     @Column(name = "ml_classification")
     private String mlClassification;
 
@@ -83,7 +88,18 @@ public class Transaction {
     @Column(name = "ml_confidence", precision = 5, scale = 4)
     private BigDecimal mlConfidence;
 
-    /** Which connector created this transaction (razorpay, payu, cashfree). Null for generic webhooks. */
+    /**
+     * Which connector created this transaction (razorpay, payu, cashfree). Null for
+     * generic webhooks.
+     */
     @Column(name = "source_gateway")
     private String sourceGateway;
+
+    /**
+     * Owning merchant — nullable for generic webhook transactions that
+     * arrive without connector context.
+     */
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "merchant_id")
+    private Merchant merchantOwner;
 }
