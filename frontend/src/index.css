@@ -1832,3 +1832,42 @@ body {
 .provisional-card__status {
   color: var(--text-muted);
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Connections Page (Manage Connections)
+   ═══════════════════════════════════════════════════════════ */
+
+.connections-page {
+  width: 100%;
+  max-width: 720px;
+  animation: fadeInUp var(--duration-base) var(--ease-out);
+}
+
+.conn-card--active {
+  border-left: 3px solid var(--success);
+}
+
+.conn-card__status {
+  font-size: 13px;
+  color: var(--success);
+  margin-top: 8px;
+  font-weight: 500;
+}
+
+.conn-card__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-end;
+}
+
+.btn-outline-danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.btn-outline-danger:hover {
+  background: var(--danger-muted);
+  color: var(--danger);
+}
+

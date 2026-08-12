@@ -6,7 +6,7 @@ import { AnomalyBanner } from './components/AnomalyBanner';
 import { LiveFeed } from './components/LiveFeed';
 import { BankScorecard } from './components/BankScorecard';
 import { TransactionDetail } from './components/TransactionDetail';
-import { GatewayOnboarding } from './components/GatewayOnboarding';
+import { ConnectionsPage } from './components/ConnectionsPage';
 import { RecoveryToast } from './components/RecoveryToast';
 import { ProvisionalSummaryCard } from './components/ProvisionalSummaryCard';
 import { getTransactions } from './api/transactions';
@@ -114,8 +114,8 @@ function App() {
                 Dashboard
               </button>
               <button
-                className={`nav-link ${location.pathname === '/onboarding' ? 'nav-link--active' : ''}`}
-                onClick={() => navigate('/onboarding')}
+                className={`nav-link ${location.pathname === '/connections' ? 'nav-link--active' : ''}`}
+                onClick={() => navigate('/connections')}
               >
                 Connections
               </button>
@@ -148,10 +148,9 @@ function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
 
-        
-        <Route path="/onboarding" element={
+        <Route path="/connections" element={
           <ProtectedRoute>
-            <GatewayOnboarding onConnected={handleGatewayConnected} />
+            <ConnectionsPage onConnected={handleGatewayConnected} />
           </ProtectedRoute>
         } />
         
@@ -191,7 +190,7 @@ function App() {
                 />
               </>
             ) : (
-              <Navigate to="/onboarding" replace />
+              <Navigate to="/connections" replace />
             )}
           </ProtectedRoute>
         } />
