@@ -20,6 +20,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -138,6 +139,7 @@ public class TransactionController {
                         .of(TransactionState.PENALTY_ACCRUING, TransactionState.ESCALATED);
 
         @PostMapping("/{txnId}/generate-complaint")
+        @Transactional(readOnly = true)
         public ResponseEntity<Map<String, String>> generateComplaint(
                         @PathVariable UUID txnId) {
 
@@ -165,12 +167,22 @@ public class TransactionController {
 
                 // Guard: transactions sourced from a payment gateway are auto-resolved
                 // via the gateway API — there is nothing to claim against the bank
-                if (txn.getSourceGateway() != null && !txn.getSourceGateway().isBlank()) {
-                        return ResponseEntity.badRequest()
-                                        .body(Map.of("error",
-                                                        "This transaction is being auto-resolved via gateway ("
-                                                                        + txn.getSourceGateway()
-                                                                        + "). No complaint is applicable."));
+                if (txn.getSourceGateway() != null && !txn.getSourceGateway().isBlank() && !"simulated".equals(txn.getSourceGateway())) {
+                        boolean isDisconnected = false;
+                        if (txn.getConnectionId() != null) {
+                                MerchantGatewayConnection conn = connectionRepository.findById(txn.getConnectionId()).orElse(null);
+                                if (conn != null && "DISCONNECTED".equals(conn.getStatus())) {
+                                        isDisconnected = true;
+                                }
+                        }
+                        
+                        if (!isDisconnected) {
+                                return ResponseEntity.badRequest()
+                                                .body(Map.of("error",
+                                                                "This transaction is being auto-resolved via gateway ("
+                                                                                + txn.getSourceGateway()
+                                                                                + "). No complaint is applicable."));
+                        }
                 }
 
                 // Look up any provisional refund the merchant fronted

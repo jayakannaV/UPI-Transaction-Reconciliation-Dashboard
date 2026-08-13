@@ -56,13 +56,15 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
     }
   };
 
+  const isRealGateway = transaction?.sourceGateway && transaction.sourceGateway !== 'simulated';
+
   const showComplaintCTA = transaction
     ? getStateDisplay(transaction.state).showComplaintAction
-        && !transaction.sourceGateway
+        && (!isRealGateway || transaction.connectionStatus === 'DISCONNECTED')
     : false;
 
   const isGatewayResolved = transaction
-    ? !!transaction.sourceGateway
+    ? isRealGateway
         && transaction.state === 'RESOLVED_REFUNDED'
     : false;
 
