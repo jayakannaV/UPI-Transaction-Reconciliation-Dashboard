@@ -51,7 +51,11 @@ ml-service:
 app:
   encryption:
     aes-key: JroH8+vWHFtReNnvTAPNMbTO/KLvJ678oafYsBh4H5A=
+  jwt:
+    secret: dGhpc0lzQURldk9ubHlKd3RTZWNyZXRLZXlGb3JIZWN0b24yMDI2
+    expiration-ms: 86400000
   connectors:
     default-remitter-bank-id: 00000000-0000-0000-0000-000000000001
     default-beneficiary-bank-id: 00000000-0000-0000-0000-000000000002
+
 

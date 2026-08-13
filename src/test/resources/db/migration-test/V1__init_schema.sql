@@ -61,8 +61,30 @@ CREATE TABLE merchants (
     encrypted_api_key   VARCHAR(1000) NOT NULL,
     encrypted_api_secret VARCHAR(1000) NOT NULL,
     webhook_secret      VARCHAR(500),
+    email               VARCHAR(255) DEFAULT '',
+    password_hash       VARCHAR(500) DEFAULT '',
+    business_name       VARCHAR(255),
     created_at          TIMESTAMP WITH TIME ZONE NOT NULL
 );
 
 CREATE INDEX idx_merchants_gateway ON merchants(connected_gateway);
+
+-- source_gateway column (from V4 migration)
+ALTER TABLE transactions ADD COLUMN source_gateway VARCHAR(50);
+
+-- merchant_id FK for tenant isolation (from V7 migration)
+ALTER TABLE transactions ADD COLUMN merchant_id UUID REFERENCES merchants(merchant_id);
+CREATE INDEX idx_transactions_merchant ON transactions(merchant_id);
+
+-- Provisional Recovery Ledger (from V5 migration)
+CREATE TABLE provisional_refunds (
+    id                          BIGINT AUTO_INCREMENT PRIMARY KEY,
+    txn_id                      UUID NOT NULL REFERENCES transactions(txn_id),
+    amount_refunded_by_merchant NUMERIC(12,2) NOT NULL,
+    refunded_at                 TIMESTAMP WITH TIME ZONE NOT NULL,
+    recovery_status             VARCHAR(50) NOT NULL DEFAULT 'PENDING_FROM_BANK'
+);
+
+CREATE INDEX idx_prov_refunds_txn ON provisional_refunds(txn_id);
+CREATE INDEX idx_prov_refunds_status ON provisional_refunds(recovery_status);
 

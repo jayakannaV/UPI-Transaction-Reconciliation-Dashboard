@@ -2,7 +2,6 @@ import type { TransactionDto } from '../api/types';
 import { StateBadge } from './StateBadge';
 import { useCountdown } from '../hooks/useCountdown';
 import { formatINR, formatCountdown, shortId } from '../utils/format';
-import { getStateDisplay } from '../utils/stateLabels';
 
 interface TransactionRowProps {
   transaction: TransactionDto;
@@ -11,7 +10,6 @@ interface TransactionRowProps {
 
 export function TransactionRow({ transaction: txn, onClick }: TransactionRowProps) {
   const countdown = useCountdown(txn.tatDeadline);
-  const stateInfo = getStateDisplay(txn.state);
   const isUrgent = txn.state === 'TAT_BREACHED' || txn.state === 'ESCALATED';
   const isPenalty = txn.state === 'PENALTY_ACCRUING';
   const showCountdown = countdown !== null && !['SUCCESS', 'BUSINESS_DECLINED', 'AUTO_REVERSED', 'RESOLVED_REFUNDED', 'ESCALATED'].includes(txn.state);
@@ -28,6 +26,16 @@ export function TransactionRow({ transaction: txn, onClick }: TransactionRowProp
           <span className="txn-row__amount">{formatINR(txn.amountInr)}</span>
           <span className="txn-row__separator">•</span>
           <span className="txn-row__bank">{txn.remitterBankName ?? 'Unknown bank'}</span>
+          {txn.gateway && (
+            <>
+              <span className="txn-row__separator">•</span>
+              <span className={`gateway-badge gateway-badge--${txn.gateway.toLowerCase()} ${txn.connectionStatus === 'DISCONNECTED' ? 'gateway-badge--disconnected' : ''}`}>
+                <span className="gateway-badge__dot" />
+                {txn.gateway}
+                {txn.connectionStatus === 'DISCONNECTED' && ' (Disconnected)'}
+              </span>
+            </>
+          )}
         </div>
         <StateBadge state={txn.state} />
       </div>

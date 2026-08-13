@@ -18,9 +18,15 @@ export interface WebSocketCallbacks {
  * @see WebSocketConfig.java — registerStompEndpoints + configureMessageBroker
  */
 export function createWebSocketClient(callbacks: WebSocketCallbacks): Client {
+  const token = localStorage.getItem('auth_token');
+  
   const client = new Client({
     // Use SockJS as the transport (matching backend's .withSockJS())
     webSocketFactory: () => new SockJS('/ws/live-feed') as unknown as WebSocket,
+
+    connectHeaders: token ? {
+      Authorization: `Bearer ${token}`
+    } : {},
 
     // Reconnect on disconnect
     reconnectDelay: 3000,
@@ -59,6 +65,10 @@ export function createWebSocketClient(callbacks: WebSocketCallbacks): Client {
     onStompError: (frame) => {
       callbacks.onStatusChange('disconnected');
       console.error('[WS] STOMP error:', frame.headers['message']);
+      if (frame.headers['message'] && frame.headers['message'].includes('AccessDeniedException')) {
+        // Handle auth failure over WS
+        window.dispatchEvent(new Event('unauthorized'));
+      }
     },
 
     onWebSocketClose: () => {

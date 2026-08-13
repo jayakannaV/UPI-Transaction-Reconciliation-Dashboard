@@ -27,17 +27,21 @@ import java.util.concurrent.ThreadLocalRandom;
 /**
  * Batch resolution scheduler — ARCHITECTURE.md §3 & §4.
  * <p>
- * Runs at {@code BATCH_TICK_INTERVAL} (≈ every 7 seconds in demo mode) and performs
+ * Runs at {@code BATCH_TICK_INTERVAL} (≈ every 7 seconds in demo mode) and
+ * performs
  * four sequential sweeps on each tick:
  * <ol>
- *   <li><b>Resolution attempt</b> — sweep DEEMED_APPROVED & PENDING_RECONCILIATION,
- *       sample resolution probability using the remitter bank's historical TD rate</li>
- *   <li><b>TAT breach detection</b> — transition unresolved txns past their deadline
- *       to TAT_BREACHED → PENALTY_ACCRUING immediately</li>
- *   <li><b>Penalty recomputation</b> — recalculate penalty_amount_inr for all
- *       PENALTY_ACCRUING transactions using the §4 formula</li>
- *   <li><b>Escalation check</b> — transition txns past the escalation threshold
- *       to ESCALATED</li>
+ * <li><b>Resolution attempt</b> — sweep DEEMED_APPROVED &
+ * PENDING_RECONCILIATION,
+ * sample resolution probability using the remitter bank's historical TD
+ * rate</li>
+ * <li><b>TAT breach detection</b> — transition unresolved txns past their
+ * deadline
+ * to TAT_BREACHED → PENALTY_ACCRUING immediately</li>
+ * <li><b>Penalty recomputation</b> — recalculate penalty_amount_inr for all
+ * PENALTY_ACCRUING transactions using the §4 formula</li>
+ * <li><b>Escalation check</b> — transition txns past the escalation threshold
+ * to ESCALATED</li>
  * </ol>
  * <p>
  * Every state change is published as a {@link TransactionStateChangedEvent}
@@ -62,9 +66,8 @@ public class BatchResolutionScheduler {
         OffsetDateTime now = OffsetDateTime.now();
         log.info("⏰ Batch resolution tick at {}", now);
 
-        // Sweep 0: Gateway-driven resolution (real API calls for Razorpay txns)
-        gatewayResolutionService.resolveRazorpayTransactions(now);
-
+        sweepDeemedApproved(now);
+        gatewayResolutionService.resolveGatewayTransactions(now);
         sweepResolution(now);
         sweepTatBreach(now);
         sweepPenaltyRecomputation(now);
@@ -76,16 +79,16 @@ public class BatchResolutionScheduler {
     /**
      * Attempts resolution for DEEMED_APPROVED and PENDING_RECONCILIATION txns.
      * <p>
-     * DEEMED_APPROVED txns are first moved to PENDING_RECONCILIATION (§2: "Enters queue"),
+     * DEEMED_APPROVED txns are first moved to PENDING_RECONCILIATION (§2: "Enters
+     * queue"),
      * then all PENDING_RECONCILIATION txns are sampled for auto-reversal.
      * <p>
      * Resolution probability = {@code 1.0 - remitterBank.historicalTdRate}.
      * Higher historical TD rate → lower chance of clean auto-resolution this tick.
      */
-    void sweepResolution(OffsetDateTime now) {
+    void sweepDeemedApproved(OffsetDateTime now) {
         // Move DEEMED_APPROVED → PENDING_RECONCILIATION first
-        List<Transaction> deemedApproved =
-                transactionRepository.findByState(TransactionState.DEEMED_APPROVED);
+        List<Transaction> deemedApproved = transactionRepository.findByState(TransactionState.DEEMED_APPROVED);
 
         for (Transaction txn : deemedApproved) {
             try {
@@ -95,10 +98,13 @@ public class BatchResolutionScheduler {
                 log.error("Failed to queue DEEMED_APPROVED txn {}: {}", txn.getTxnId(), e.getMessage());
             }
         }
+    }
 
-        // Now attempt resolution for all PENDING_RECONCILIATION
-        List<Transaction> pending =
-                transactionRepository.findByState(TransactionState.PENDING_RECONCILIATION);
+    void sweepResolution(OffsetDateTime now) {
+
+        // Now attempt resolution for both PENDING_RECONCILIATION and PENALTY_ACCRUING
+        List<Transaction> pending = transactionRepository.findByStateIn(
+                List.of(TransactionState.PENDING_RECONCILIATION, TransactionState.PENALTY_ACCRUING));
 
         for (Transaction txn : pending) {
             try {
@@ -139,8 +145,7 @@ public class BatchResolutionScheduler {
      * to TAT_BREACHED, then immediately to PENALTY_ACCRUING (§2).
      */
     void sweepTatBreach(OffsetDateTime now) {
-        List<Transaction> pending =
-                transactionRepository.findByState(TransactionState.PENDING_RECONCILIATION);
+        List<Transaction> pending = transactionRepository.findByState(TransactionState.PENDING_RECONCILIATION);
 
         for (Transaction txn : pending) {
             try {
@@ -170,8 +175,7 @@ public class BatchResolutionScheduler {
      * using the §4 formula.
      */
     void sweepPenaltyRecomputation(OffsetDateTime now) {
-        List<Transaction> accruing =
-                transactionRepository.findByState(TransactionState.PENALTY_ACCRUING);
+        List<Transaction> accruing = transactionRepository.findByState(TransactionState.PENALTY_ACCRUING);
 
         for (Transaction txn : accruing) {
             try {
@@ -201,8 +205,7 @@ public class BatchResolutionScheduler {
      * the escalation threshold (demo: T+3).
      */
     void sweepEscalation(OffsetDateTime now) {
-        List<Transaction> accruing =
-                transactionRepository.findByState(TransactionState.PENALTY_ACCRUING);
+        List<Transaction> accruing = transactionRepository.findByState(TransactionState.PENALTY_ACCRUING);
 
         for (Transaction txn : accruing) {
             try {
@@ -239,11 +242,15 @@ public class BatchResolutionScheduler {
      */
     @Transactional
     public void applyTransition(Transaction txn,
-                                 TransactionEvent event,
-                                 String reason,
-                                 OffsetDateTime at) {
+            TransactionEvent event,
+            String reason,
+            OffsetDateTime at) {
         TransactionState fromState = txn.getState();
         TransactionState toState = stateMachine.transition(fromState, event);
+
+        if (toState == TransactionState.SUCCESS || toState == TransactionState.RESOLVED_REFUNDED) {
+            txn.setResolutionReason(reason);
+        }
 
         // Update entity
         txn.setState(toState);
@@ -268,7 +275,10 @@ public class BatchResolutionScheduler {
                 txn.getPenaltyAmountInr(),
                 txn.getRemitterBank() != null ? txn.getRemitterBank().getBankId() : null,
                 txn.getBeneficiaryBank() != null ? txn.getBeneficiaryBank().getBankId() : null,
-                at));
+                at,
+                txn.getMerchantOwner() != null ? txn.getMerchantOwner().getMerchantId() : null,
+                txn.getConnectionId(),
+                txn.getResolutionReason()));
 
         log.debug("Transition: {} → {} [{}] for txn {}", fromState, toState, reason, txn.getTxnId());
     }

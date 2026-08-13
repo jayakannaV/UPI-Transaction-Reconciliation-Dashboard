@@ -1,5 +1,5 @@
 import { apiFetch } from './client';
-import type { TransactionDto, PageResponse, StateTransitionDto } from './types';
+import type { TransactionDto, PageResponse, StateTransitionDto, ProvisionalRefundDto } from './types';
 
 export function getTransactions(params?: {
   state?: string;
@@ -25,9 +25,31 @@ export function getTransactionHistory(
 
 export function generateComplaint(
   txnId: string
-): Promise<{ complaint: string }> {
-  return apiFetch<{ complaint: string }>(
+): Promise<{ complaint: string; grievanceEmail?: string }> {
+  return apiFetch<{ complaint: string; grievanceEmail?: string }>(
     `/transactions/${txnId}/generate-complaint`,
+    { method: 'POST' }
+  );
+}
+
+export function createProvisionalRefund(
+  txnId: string,
+  amount: number
+): Promise<ProvisionalRefundDto> {
+  return apiFetch<ProvisionalRefundDto>(
+    `/transactions/${txnId}/provisional-refund`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ amountRefundedByMerchant: amount }),
+    }
+  );
+}
+
+export function markPenaltyReceived(
+  txnId: string
+): Promise<{ message: string }> {
+  return apiFetch<{ message: string }>(
+    `/transactions/${txnId}/mark-penalty-received`,
     { method: 'POST' }
   );
 }

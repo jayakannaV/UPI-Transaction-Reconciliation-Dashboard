@@ -11,6 +11,7 @@ import org.springframework.stereotype.Repository;
 import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Repository
@@ -54,4 +55,23 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID>,
      * rolling-window cutoff.
      */
     long countByRemitterBank_BankIdAndCreatedAtAfter(UUID bankId, OffsetDateTime after);
+
+    // ── Chaos controller queries (demo-only) ─────────────────────────────
+
+    Optional<Transaction> findFirstByMerchantOwner_MerchantIdAndSourceGatewayAndStateOrderByCreatedAtDesc(
+            UUID merchantId, String sourceGateway, TransactionState state);
+
+    /** Find a transaction by ID scoped to a specific merchant (ownership check). */
+    @EntityGraph(attributePaths = {"remitterBank", "beneficiaryBank"})
+    Optional<Transaction> findByTxnIdAndMerchantOwner_MerchantId(UUID txnId, UUID merchantId);
+
+    /** Find a transaction by its idempotency key. */
+    Optional<Transaction> findByIdempotencyKey(String idempotencyKey);
+
+    /** List all transactions belonging to a merchant. */
+    @EntityGraph(attributePaths = {"remitterBank", "beneficiaryBank"})
+    List<Transaction> findByMerchantOwner_MerchantId(UUID merchantId);
+
+    /** List transactions belonging to a merchant in a given state. */
+    List<Transaction> findByMerchantOwner_MerchantIdAndState(UUID merchantId, TransactionState state);
 }

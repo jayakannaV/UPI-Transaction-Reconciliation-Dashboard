@@ -1,8 +1,8 @@
 package com.upi.reconcile.connectors;
 
 import com.upi.reconcile.connectors.crypto.AesGcmEncryptor;
-import com.upi.reconcile.connectors.domain.Merchant;
-import com.upi.reconcile.connectors.domain.MerchantRepository;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnection;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnectionRepository;
 import com.upi.reconcile.domain.StateTransition;
 import com.upi.reconcile.domain.StateTransitionRepository;
 import com.upi.reconcile.domain.StateMachine;
@@ -19,24 +19,29 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Gateway-driven resolution service for Razorpay-sourced transactions.
  *
- * <p>When a transaction sourced from Razorpay enters {@code PENALTY_ACCRUING},
+ * <p>
+ * When a transaction sourced from Razorpay enters {@code PENALTY_ACCRUING},
  * this service calls Razorpay's real API to determine the true payment status
  * and takes corrective action:
  *
  * <ul>
- *   <li>If Razorpay says {@code captured} → transition to {@code SUCCESS}
- *       (auto-corrected via gateway status check)</li>
- *   <li>If Razorpay says {@code failed}/{@code created}/{@code authorized} →
- *       initiate refund via API, then transition to {@code RESOLVED_REFUNDED}</li>
- *   <li>If Razorpay says {@code refunded} → transition to {@code RESOLVED_REFUNDED}
- *       (already refunded)</li>
+ * <li>If Razorpay says {@code captured} → transition to {@code SUCCESS}
+ * (auto-corrected via gateway status check)</li>
+ * <li>If Razorpay says {@code failed}/{@code created}/{@code authorized} →
+ * initiate refund via API, then transition to {@code RESOLVED_REFUNDED}</li>
+ * <li>If Razorpay says {@code refunded} → transition to
+ * {@code RESOLVED_REFUNDED}
+ * (already refunded)</li>
  * </ul>
  *
- * <p>This is invoked from {@link com.upi.reconcile.scheduler.BatchResolutionScheduler}
+ * <p>
+ * This is invoked from
+ * {@link com.upi.reconcile.scheduler.BatchResolutionScheduler}
  * as a new sweep that runs <em>before</em> the simulated NPCI batch resolution,
  * ensuring Razorpay transactions get real API-driven resolution.
  */
@@ -47,56 +52,66 @@ public class GatewayResolutionService {
 
     private final TransactionRepository transactionRepository;
     private final StateTransitionRepository stateTransitionRepository;
-    private final MerchantRepository merchantRepository;
+    private final MerchantGatewayConnectionRepository connectionRepository;
     private final RazorpayApiClient razorpayApiClient;
     private final AesGcmEncryptor encryptor;
     private final StateMachine stateMachine;
     private final ApplicationEventPublisher eventPublisher;
 
     /**
-     * Resolves all PENALTY_ACCRUING transactions sourced from Razorpay
-     * by calling the real Razorpay Payments API.
+     * Resolves genuine real-gateway transactions in PENDING_RECONCILIATION
+     * by checking their real payment status.
      *
      * @param now the current timestamp for audit records
      */
     @Transactional
-    public void resolveRazorpayTransactions(OffsetDateTime now) {
-        List<Transaction> razorpayPenalty = transactionRepository
-                .findByStateAndSourceGateway(TransactionState.PENALTY_ACCRUING, "razorpay");
+    public void resolveGatewayTransactions(OffsetDateTime now) {
+        List<Transaction> pending = transactionRepository.findByStateIn(
+                List.of(TransactionState.PENDING_RECONCILIATION, TransactionState.PENALTY_ACCRUING));
 
-        if (razorpayPenalty.isEmpty()) {
+        if (pending.isEmpty()) {
             return;
         }
 
-        log.info("🔌 Gateway resolution sweep — {} Razorpay PENALTY_ACCRUING transactions",
-                razorpayPenalty.size());
+        int count = 0;
 
-        // Look up Razorpay merchant credentials (use first connected merchant)
-        List<Merchant> merchants = merchantRepository.findByConnectedGateway("razorpay");
-        if (merchants.isEmpty()) {
-            log.warn("No Razorpay merchant found — skipping gateway resolution");
-            return;
-        }
-
-        Merchant merchant = merchants.getFirst();
-        String apiKey;
-        String apiSecret;
-        try {
-            apiKey = encryptor.decrypt(merchant.getEncryptedApiKey());
-            apiSecret = encryptor.decrypt(merchant.getEncryptedApiSecret());
-        } catch (Exception e) {
-            log.error("Failed to decrypt Razorpay credentials for merchant {} — skipping",
-                    merchant.getMerchantId(), e);
-            return;
-        }
-
-        for (Transaction txn : razorpayPenalty) {
-            try {
-                resolveOneTransaction(txn, apiKey, apiSecret, now);
-            } catch (Exception e) {
-                log.error("Gateway resolution failed for txn {} (payment_id={}) — will retry next tick",
-                        txn.getTxnId(), txn.getIdempotencyKey(), e);
+        for (Transaction txn : pending) {
+            if (txn.getConnectionId() == null) {
+                continue;
             }
+
+            MerchantGatewayConnection connection = connectionRepository.findById(txn.getConnectionId()).orElse(null);
+            
+            if (connection == null 
+                    || !MerchantGatewayConnection.STATUS_ACTIVE.equals(connection.getStatus())
+                    || "simulated".equals(connection.getGateway())) {
+                continue;
+            }
+
+            if ("razorpay".equals(connection.getGateway())) {
+                String apiKey;
+                String apiSecret;
+                try {
+                    apiKey = encryptor.decrypt(connection.getEncryptedApiKey());
+                    apiSecret = encryptor.decrypt(connection.getEncryptedApiSecret());
+                } catch (Exception e) {
+                    log.error("Failed to decrypt Razorpay credentials for connection {} — skipping",
+                            connection.getConnectionId(), e);
+                    continue;
+                }
+
+                try {
+                    resolveOneTransaction(txn, apiKey, apiSecret, now);
+                    count++;
+                } catch (Exception e) {
+                    log.error("Gateway resolution failed for txn {} (payment_id={}) — will retry next tick",
+                            txn.getTxnId(), txn.getIdempotencyKey(), e);
+                }
+            }
+        }
+
+        if (count > 0) {
+            log.info("🔌 Gateway resolution sweep — resolved {} gateway transactions", count);
         }
     }
 
@@ -104,17 +119,17 @@ public class GatewayResolutionService {
      * Resolves a single Razorpay transaction by checking its real payment status.
      */
     private void resolveOneTransaction(Transaction txn, String apiKey, String apiSecret,
-                                        OffsetDateTime now) {
-        String paymentId = txn.getIdempotencyKey(); // idempotency_key = Razorpay payment_id
+            OffsetDateTime now) {
+        String paymentId = txn.getExternalPaymentRef() != null && !txn.getExternalPaymentRef().isBlank()
+                ? txn.getExternalPaymentRef()
+                : txn.getIdempotencyKey(); // fallback if external ref is missing
 
-        RazorpayApiClient.PaymentStatus status =
-                razorpayApiClient.fetchPaymentStatus(apiKey, apiSecret, paymentId);
+        RazorpayApiClient.PaymentStatus status = razorpayApiClient.fetchPaymentStatus(apiKey, apiSecret, paymentId);
 
         switch (status.status()) {
             case "captured" -> {
-                // Payment actually succeeded — webhook was just missed/delayed
-                applyTransition(txn, TransactionEvent.GATEWAY_STATUS_CHECK_SUCCESS,
-                        "Auto-corrected via Razorpay status check — payment confirmed successful", now);
+                String reason = String.format("Checked Razorpay payment status via GET /payments/%s — gateway confirmed status=captured, webhook had been missed. Marked SUCCESS.", paymentId);
+                applyTransition(txn, TransactionEvent.GATEWAY_STATUS_CHECK_SUCCESS, reason, now);
                 txn.setResolvedAt(now);
                 transactionRepository.save(txn);
 
@@ -123,9 +138,8 @@ public class GatewayResolutionService {
             }
 
             case "refunded" -> {
-                // Already refunded on Razorpay's side
-                applyTransition(txn, TransactionEvent.GATEWAY_REFUND_COMPLETED,
-                        "Auto-corrected via Razorpay status check — already refunded on gateway", now);
+                String reason = String.format("Checked Razorpay payment status via GET /payments/%s — gateway confirmed status=refunded. Marked RESOLVED_REFUNDED.", paymentId);
+                applyTransition(txn, TransactionEvent.GATEWAY_REFUND_COMPLETED, reason, now);
                 txn.setResolvedAt(now);
                 transactionRepository.save(txn);
 
@@ -134,14 +148,13 @@ public class GatewayResolutionService {
             }
 
             case "failed", "created", "authorized" -> {
-                // Payment genuinely failed or never completed — initiate refund
                 try {
-                    RazorpayApiClient.RefundResult refund =
-                            razorpayApiClient.initiateRefund(apiKey, apiSecret, paymentId);
+                    RazorpayApiClient.RefundResult refund = razorpayApiClient.initiateRefund(apiKey, apiSecret, paymentId);
 
-                    applyTransition(txn, TransactionEvent.GATEWAY_REFUND_COMPLETED,
-                            String.format("Auto-refunded via Razorpay API — refund_id: %s, status: %s",
-                                    refund.refundId(), refund.status()), now);
+                    String reason = String.format("Checked Razorpay payment status — gateway confirmed status=%s. Issued refund via POST /payments/%s/refund, refund_id=%s. Marked RESOLVED_REFUNDED.", 
+                            status.status(), paymentId, refund.refundId());
+                            
+                    applyTransition(txn, TransactionEvent.GATEWAY_REFUND_COMPLETED, reason, now);
                     txn.setResolvedAt(now);
                     transactionRepository.save(txn);
 
@@ -162,9 +175,13 @@ public class GatewayResolutionService {
      * Applies a state transition, records audit trail, and publishes event.
      */
     private void applyTransition(Transaction txn, TransactionEvent event,
-                                  String reason, OffsetDateTime at) {
+            String reason, OffsetDateTime at) {
         TransactionState fromState = txn.getState();
         TransactionState toState = stateMachine.transition(fromState, event);
+
+        if (toState == TransactionState.SUCCESS || toState == TransactionState.RESOLVED_REFUNDED) {
+            txn.setResolutionReason(reason);
+        }
 
         txn.setState(toState);
         transactionRepository.save(txn);
@@ -186,7 +203,10 @@ public class GatewayResolutionService {
                 txn.getPenaltyAmountInr(),
                 txn.getRemitterBank() != null ? txn.getRemitterBank().getBankId() : null,
                 txn.getBeneficiaryBank() != null ? txn.getBeneficiaryBank().getBankId() : null,
-                at));
+                at,
+                txn.getMerchantOwner() != null ? txn.getMerchantOwner().getMerchantId() : null,
+                txn.getConnectionId(),
+                txn.getResolutionReason()));
 
         log.debug("Transition: {} → {} [{}] for txn {}", fromState, toState, reason, txn.getTxnId());
     }

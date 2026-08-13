@@ -16,9 +16,9 @@ import java.util.UUID;
 /**
  * Merchant entity — maps to the {@code merchants} table.
  *
- * <p>Stores the merchant's connected payment gateway and AES-256-GCM
- * encrypted API credentials. The {@code webhook_secret} is used to
- * verify incoming webhook signatures from gateways.
+ * <p>
+ * Represents a login identity. Gateway connection credentials are stored
+ * separately in {@link MerchantGatewayConnection} (one-to-many).
  */
 @Entity
 @Table(name = "merchants")
@@ -36,17 +36,14 @@ public class Merchant {
     @Column(nullable = false)
     private String name;
 
-    @Column(name = "connected_gateway", nullable = false)
-    private String connectedGateway;
+    @Column(unique = true)
+    private String email;
 
-    @Column(name = "encrypted_api_key", nullable = false)
-    private String encryptedApiKey;
+    @Column(name = "password_hash")
+    private String passwordHash;
 
-    @Column(name = "encrypted_api_secret", nullable = false)
-    private String encryptedApiSecret;
-
-    @Column(name = "webhook_secret")
-    private String webhookSecret;
+    @Column(name = "business_name")
+    private String businessName;
 
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;

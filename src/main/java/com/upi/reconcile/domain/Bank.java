@@ -41,4 +41,8 @@ public class Bank {
 
     @Column(name = "historical_deemed_approved_rate", precision = 6, scale = 4)
     private BigDecimal historicalDeemedApprovedRate;
+
+    /** Official grievance/nodal officer email (null if not publicly known). */
+    @Column(name = "grievance_email")
+    private String grievanceEmail;
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { TransactionDto, StateTransitionDto } from '../api/types';
-import { getTransactions, getTransactionHistory, generateComplaint } from '../api/transactions';
+import { getTransactions, getTransactionHistory, generateComplaint, createProvisionalRefund } from '../api/transactions';
 import { StateBadge } from './StateBadge';
 import { ComplaintModal } from './ComplaintModal';
 import { formatINR, formatDateTime, shortId } from '../utils/format';
@@ -16,7 +16,12 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
   const [history, setHistory] = useState<StateTransitionDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [complaintText, setComplaintText] = useState<string | null>(null);
+  const [grievanceEmail, setGrievanceEmail] = useState<string | null>(null);
   const [generatingComplaint, setGeneratingComplaint] = useState(false);
+  const [refundLoading, setRefundLoading] = useState(false);
+  const [refundSuccess, setRefundSuccess] = useState(false);
+  const [refundError, setRefundError] = useState<string | null>(null);
+  const [markingPenalty, setMarkingPenalty] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -44,6 +49,7 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
       setGeneratingComplaint(true);
       const result = await generateComplaint(txnId);
       setComplaintText(result.complaint);
+      setGrievanceEmail(result.grievanceEmail ?? null);
     } catch (err) {
       console.error('Failed to generate complaint:', err);
     } finally {
@@ -51,9 +57,62 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
     }
   };
 
+  const isRealGateway = transaction?.sourceGateway && transaction.sourceGateway !== 'simulated';
+
   const showComplaintCTA = transaction
     ? getStateDisplay(transaction.state).showComplaintAction
     : false;
+
+  const showMarkPenaltyReceivedCTA = transaction
+    ? (transaction.state === 'PENALTY_ACCRUING' || transaction.state === 'ESCALATED')
+    : false;
+
+  const handleMarkPenaltyReceived = async () => {
+    if (!transaction) return;
+    try {
+      setMarkingPenalty(true);
+      const { markPenaltyReceived } = await import('../api/transactions');
+      await markPenaltyReceived(transaction.txnId);
+      // Close detail view to refresh main feed
+      onClose();
+    } catch (err) {
+      console.error('Failed to mark penalty received:', err);
+    } finally {
+      setMarkingPenalty(false);
+    }
+  };
+
+  const isGatewayResolved = transaction
+    ? isRealGateway
+        && transaction.state === 'RESOLVED_REFUNDED'
+    : false;
+
+  const UNRESOLVED_STATES = ['DEEMED_APPROVED', 'PENDING_RECONCILIATION', 'TAT_BREACHED', 'PENALTY_ACCRUING'];
+  const canResolveByApi = transaction
+    ? isRealGateway 
+        && transaction.connectionStatus === 'ACTIVE'
+        && UNRESOLVED_STATES.includes(transaction.state)
+    : false;
+
+  const REFUND_ELIGIBLE_STATES = ['DEEMED_APPROVED', 'PENDING_RECONCILIATION', 'PENALTY_ACCRUING'];
+  const showRefundCTA = transaction
+    ? REFUND_ELIGIBLE_STATES.includes(transaction.state) && !refundSuccess
+    : false;
+
+  const handleProvisionalRefund = async () => {
+    if (!transaction) return;
+    try {
+      setRefundLoading(true);
+      setRefundError(null);
+      await createProvisionalRefund(transaction.txnId, transaction.amountInr);
+      setRefundSuccess(true);
+    } catch (err: any) {
+      console.error('Failed to create provisional refund:', err);
+      setRefundError(err?.message ?? 'Failed to track refund. Please try again.');
+    } finally {
+      setRefundLoading(false);
+    }
+  };
 
   return (
     <>
@@ -143,6 +202,18 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
                     {transaction.txnId}
                   </span>
                 </div>
+                {transaction.gateway && (
+                  <div className="detail-item">
+                    <span className="detail-item__label">Gateway</span>
+                    <span className="detail-item__value">
+                      <span className={`gateway-badge gateway-badge--${transaction.gateway.toLowerCase()} ${transaction.connectionStatus === 'DISCONNECTED' ? 'gateway-badge--disconnected' : ''}`}>
+                        <span className="gateway-badge__dot" />
+                        {transaction.gateway}
+                        {transaction.connectionStatus === 'DISCONNECTED' && ' (Disconnected)'}
+                      </span>
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* ── Complaint CTA ─────────────────────────── */}
@@ -158,9 +229,91 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
                       Generating...
                     </>
                   ) : (
-                    <>📋 Generate RBI Complaint</>
+                    <>📋 Generate Complaint Draft</>
                   )}
                 </button>
+              )}
+
+              {/* ── Manual Penalty Received CTA ───────────── */}
+              {showMarkPenaltyReceivedCTA && (
+                <button
+                  className="btn-primary btn-primary--full"
+                  style={{ marginTop: '0.5rem', backgroundColor: 'var(--success)' }}
+                  onClick={handleMarkPenaltyReceived}
+                  disabled={markingPenalty}
+                >
+                  {markingPenalty ? (
+                    <>
+                      <span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />
+                      Marking...
+                    </>
+                  ) : (
+                    <>✅ Mark Penalty Received (Manual)</>
+                  )}
+                </button>
+              )}
+
+              {/* ── Gateway auto-resolved badge ──────────── */}
+              {isGatewayResolved && (
+                <div className="gateway-resolved-banner" id="gateway-resolved-badge">
+                  <span className="gateway-resolved-banner__icon">✓</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <span style={{ fontWeight: 600 }}>
+                      Auto-resolved via gateway
+                    </span>
+                    <span style={{ fontSize: '13px', color: 'var(--primary)', opacity: 0.85 }}>
+                      {transaction.resolutionReason || 'Resolved automatically — details unavailable'}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* ── API resolvable badge ──────────── */}
+              {canResolveByApi && (
+                <div className="gateway-resolved-banner" style={{ backgroundColor: '#f0f9ff', border: '1px solid #bae6fd', color: '#0369a1' }}>
+                  <span className="gateway-resolved-banner__icon">🔄</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <span style={{ fontWeight: 600 }}>
+                      Resolvable via API
+                    </span>
+                    <span style={{ fontSize: '13px', opacity: 0.85 }}>
+                      This transaction is connected to an active gateway and will be checked automatically.
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Provisional Refund CTA ────────────────── */}
+              {showRefundCTA && (
+                <button
+                  className="btn-primary btn-primary--recovery btn-primary--full"
+                  onClick={handleProvisionalRefund}
+                  disabled={refundLoading}
+                >
+                  {refundLoading ? (
+                    <>
+                      <span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />
+                      Tracking...
+                    </>
+                  ) : (
+                    <>💸 I refunded the customer myself — track this as pending recovery</>
+                  )}
+                </button>
+              )}
+              {refundSuccess && (
+                <div className="refund-success-banner">
+                  <span className="refund-success-banner__icon">✅</span>
+                  <span>
+                    Recorded! We're tracking {formatINR(transaction?.amountInr ?? 0)} as
+                    fronted by you — you'll be notified when the bank settles.
+                  </span>
+                </div>
+              )}
+              {refundError && (
+                <div className="refund-error-banner">
+                  <span className="refund-error-banner__icon">⚠️</span>
+                  <span>{refundError}</span>
+                </div>
               )}
 
               {/* ── State History Timeline ────────────────── */}
@@ -217,7 +370,9 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
       {complaintText && (
         <ComplaintModal
           complaintText={complaintText}
-          onClose={() => setComplaintText(null)}
+          grievanceEmail={grievanceEmail}
+          txnId={txnId}
+          onClose={() => { setComplaintText(null); setGrievanceEmail(null); }}
         />
       )}
     </>

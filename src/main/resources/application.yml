@@ -75,7 +75,12 @@ app:
   encryption:
     # Base64-encoded 256-bit AES key (DEV ONLY — use env var / secrets manager in production)
     aes-key: JroH8+vWHFtReNnvTAPNMbTO/KLvJ678oafYsBh4H5A=
+  jwt:
+    # Base64-encoded 256-bit HS256 signing key (DEV ONLY — override via APP_JWT_SECRET env var)
+    secret: dGhpc0lzQURldk9ubHlKd3RTZWNyZXRLZXlGb3JIZWN0b24yMDI2
+    expiration-ms: 86400000   # 24 hours
   connectors:
     # Default bank UUIDs for gateway connectors (must match banks seeded by BankSeedRunner)
     default-remitter-bank-id: a362b32a-1ca2-3f58-b9f2-ad5e9dd64b77     # HDFC Bank Ltd.
     default-beneficiary-bank-id: 08fe9ca5-0508-3912-936d-f22c31463329   # ICICI Bank Ltd.
+

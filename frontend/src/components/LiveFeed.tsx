@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import type { TransactionDto, PageResponse, LiveFeedMessage } from '../api/types';
 import { getTransactions } from '../api/transactions';
-import { StateBadge } from './StateBadge';
+
 import { TransactionRow } from './TransactionRow';
 
 interface LiveFeedProps {
@@ -14,7 +14,7 @@ const STATE_FILTERS = [
   { value: 'PENALTY_ACCRUING', label: 'Stuck payments' },
   { value: 'TAT_BREACHED', label: 'Deadline missed' },
   { value: 'PENDING_RECONCILIATION', label: 'Under review' },
-  { value: 'ESCALATED', label: 'Complaint filed' },
+  { value: 'ESCALATED', label: 'Draft ready' },
   { value: 'RESOLVED_REFUNDED', label: 'Refunded' },
   { value: 'SUCCESS', label: 'Successful' },
 ];
@@ -25,13 +25,15 @@ export function LiveFeed({ liveMessages, onSelectTransaction }: LiveFeedProps) {
   const [totalPages, setTotalPages] = useState(0);
   const [totalElements, setTotalElements] = useState(0);
   const [stateFilter, setStateFilter] = useState('');
+  const [gatewayFilter, setGatewayFilter] = useState('');
   const [loading, setLoading] = useState(true);
 
   const fetchTransactions = useCallback(async () => {
     try {
       setLoading(true);
-      const params: { state?: string; page: number } = { page };
+      const params: { state?: string; gateway?: string; page: number } = { page };
       if (stateFilter) params.state = stateFilter;
+      if (gatewayFilter) params.gateway = gatewayFilter;
       const data: PageResponse<TransactionDto> = await getTransactions(params);
       setTransactions(data.content);
       setTotalPages(data.totalPages);
@@ -41,7 +43,7 @@ export function LiveFeed({ liveMessages, onSelectTransaction }: LiveFeedProps) {
     } finally {
       setLoading(false);
     }
-  }, [page, stateFilter]);
+  }, [page, stateFilter, gatewayFilter]);
 
   // Initial fetch + refetch on filter/page change
   useEffect(() => {
@@ -74,6 +76,19 @@ export function LiveFeed({ liveMessages, onSelectTransaction }: LiveFeedProps) {
             {f.label}
           </button>
         ))}
+        
+        <select 
+          className="feed-filter feed-filter-select"
+          value={gatewayFilter}
+          onChange={(e) => { setGatewayFilter(e.target.value); setPage(0); }}
+          aria-label="Filter by gateway"
+        >
+          <option value="">All Gateways</option>
+          <option value="razorpay">Razorpay</option>
+          <option value="payu">PayU</option>
+          <option value="cashfree">Cashfree</option>
+          <option value="simulated">Simulated</option>
+        </select>
       </div>
 
       {loading ? (

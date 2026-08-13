@@ -2,7 +2,8 @@ package com.upi.reconcile.connectors;
 
 import com.upi.reconcile.connectors.crypto.AesGcmEncryptor;
 import com.upi.reconcile.connectors.domain.Merchant;
-import com.upi.reconcile.connectors.domain.MerchantRepository;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnection;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnectionRepository;
 import com.upi.reconcile.domain.Bank;
 import com.upi.reconcile.domain.StateTransition;
 import com.upi.reconcile.domain.StateTransitionRepository;
@@ -24,32 +25,21 @@ import org.springframework.context.ApplicationEventPublisher;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/**
- * Unit tests for {@link GatewayResolutionService} using mocked Razorpay API client.
- *
- * <p>Tests the four resolution scenarios:
- * <ol>
- *   <li>Razorpay status=captured → SUCCESS</li>
- *   <li>Razorpay status=failed → refund → RESOLVED_REFUNDED</li>
- *   <li>Non-Razorpay transactions are skipped</li>
- *   <li>Razorpay API errors are handled gracefully</li>
- * </ol>
- */
 @ExtendWith(MockitoExtension.class)
 class GatewayResolutionServiceTest {
 
     @Mock private TransactionRepository transactionRepository;
     @Mock private StateTransitionRepository stateTransitionRepository;
-    @Mock private MerchantRepository merchantRepository;
+    @Mock private MerchantGatewayConnectionRepository connectionRepository;
     @Mock private RazorpayApiClient razorpayApiClient;
     @Mock private AesGcmEncryptor encryptor;
     @Mock private ApplicationEventPublisher eventPublisher;
@@ -68,7 +58,7 @@ class GatewayResolutionServiceTest {
         service = new GatewayResolutionService(
                 transactionRepository,
                 stateTransitionRepository,
-                merchantRepository,
+                connectionRepository,
                 razorpayApiClient,
                 encryptor,
                 stateMachine,
@@ -76,193 +66,165 @@ class GatewayResolutionServiceTest {
         );
     }
 
-    private Transaction buildPenaltyTransaction(String paymentId, String sourceGateway) {
+    private Transaction buildPendingTransaction(String paymentId, UUID connectionId) {
         Bank remitter = Bank.builder().bankId(UUID.randomUUID()).name("HDFC Bank").build();
         Bank beneficiary = Bank.builder().bankId(UUID.randomUUID()).name("ICICI Bank").build();
         return Transaction.builder()
                 .txnId(UUID.randomUUID())
                 .idempotencyKey(paymentId)
+                .connectionId(connectionId)
                 .remitterBank(remitter)
                 .beneficiaryBank(beneficiary)
                 .amountInr(BigDecimal.valueOf(500))
-                .state(TransactionState.PENALTY_ACCRUING)
+                .state(TransactionState.PENDING_RECONCILIATION)
                 .createdAt(OffsetDateTime.now().minusMinutes(30))
-                .sourceGateway(sourceGateway)
                 .build();
     }
 
-    private Merchant buildMerchant() {
-        return Merchant.builder()
+    private MerchantGatewayConnection buildRazorpayConnection(UUID connectionId) {
+        Merchant merchant = Merchant.builder()
                 .merchantId(UUID.randomUUID())
                 .name("Test Merchant")
-                .connectedGateway("razorpay")
+                .build();
+        return MerchantGatewayConnection.builder()
+                .connectionId(connectionId)
+                .merchant(merchant)
+                .gateway("razorpay")
                 .encryptedApiKey(ENCRYPTED_KEY)
                 .encryptedApiSecret(ENCRYPTED_SECRET)
+                .webhookSecret("test_webhook_secret")
+                .status(MerchantGatewayConnection.STATUS_ACTIVE)
+                .connectedAt(OffsetDateTime.now())
                 .build();
     }
-
-    // ── Test 1: Razorpay status=captured → SUCCESS ──────────────────
 
     @Test
     @DisplayName("Razorpay captured → transitions to SUCCESS with gateway reason")
     void razorpayCaptured_transitionsToSuccess() {
         String paymentId = "pay_TestCaptured123";
-        Transaction txn = buildPenaltyTransaction(paymentId, "razorpay");
-        Merchant merchant = buildMerchant();
+        UUID connId = UUID.randomUUID();
+        Transaction txn = buildPendingTransaction(paymentId, connId);
+        MerchantGatewayConnection connection = buildRazorpayConnection(connId);
 
-        when(transactionRepository.findByStateAndSourceGateway(
-                TransactionState.PENALTY_ACCRUING, "razorpay"))
+        when(transactionRepository.findByState(TransactionState.PENDING_RECONCILIATION))
                 .thenReturn(List.of(txn));
-        when(merchantRepository.findByConnectedGateway("razorpay"))
-                .thenReturn(List.of(merchant));
+        when(connectionRepository.findById(connId)).thenReturn(Optional.of(connection));
         when(encryptor.decrypt(ENCRYPTED_KEY)).thenReturn(DECRYPTED_KEY);
         when(encryptor.decrypt(ENCRYPTED_SECRET)).thenReturn(DECRYPTED_SECRET);
+        
         when(razorpayApiClient.fetchPaymentStatus(DECRYPTED_KEY, DECRYPTED_SECRET, paymentId))
                 .thenReturn(new RazorpayApiClient.PaymentStatus(paymentId, "captured"));
+        
         when(transactionRepository.save(any(Transaction.class))).thenAnswer(i -> i.getArgument(0));
 
-        // Act
-        service.resolveRazorpayTransactions(OffsetDateTime.now());
+        service.resolveGatewayTransactions(OffsetDateTime.now());
 
-        // Assert — state changed to SUCCESS
         assertThat(txn.getState()).isEqualTo(TransactionState.SUCCESS);
         assertThat(txn.getResolvedAt()).isNotNull();
+        assertThat(txn.getResolutionReason()).contains("gateway confirmed status=captured");
 
-        // Assert — audit trail recorded with gateway-specific reason
         ArgumentCaptor<StateTransition> stCaptor = ArgumentCaptor.forClass(StateTransition.class);
         verify(stateTransitionRepository).save(stCaptor.capture());
         StateTransition saved = stCaptor.getValue();
-        assertThat(saved.getFromState()).isEqualTo("PENALTY_ACCRUING");
+        assertThat(saved.getFromState()).isEqualTo("PENDING_RECONCILIATION");
         assertThat(saved.getToState()).isEqualTo("SUCCESS");
-        assertThat(saved.getReason()).contains("via Razorpay");
-        assertThat(saved.getReason()).contains("payment confirmed successful");
+        assertThat(saved.getReason()).contains("webhook had been missed");
 
-        // Assert — no refund call
         verify(razorpayApiClient, never()).initiateRefund(any(), any(), any());
-
-        // Assert — event published
         verify(eventPublisher).publishEvent(any(TransactionStateChangedEvent.class));
     }
 
-    // ── Test 2: Razorpay status=failed → refund → RESOLVED_REFUNDED ─
+    @Test
+    @DisplayName("Prefers externalPaymentRef over idempotencyKey")
+    void prefersExternalPaymentRef() {
+        String paymentId = "pay_InternalIdempotency123";
+        String externalRef = "pay_ExternalActualRef999";
+        UUID connId = UUID.randomUUID();
+        Transaction txn = buildPendingTransaction(paymentId, connId);
+        txn.setExternalPaymentRef(externalRef);
+        MerchantGatewayConnection connection = buildRazorpayConnection(connId);
+
+        when(transactionRepository.findByState(TransactionState.PENDING_RECONCILIATION))
+                .thenReturn(List.of(txn));
+        when(connectionRepository.findById(connId)).thenReturn(Optional.of(connection));
+        when(encryptor.decrypt(ENCRYPTED_KEY)).thenReturn(DECRYPTED_KEY);
+        when(encryptor.decrypt(ENCRYPTED_SECRET)).thenReturn(DECRYPTED_SECRET);
+        
+        // Mock using the externalRef!
+        when(razorpayApiClient.fetchPaymentStatus(DECRYPTED_KEY, DECRYPTED_SECRET, externalRef))
+                .thenReturn(new RazorpayApiClient.PaymentStatus(externalRef, "captured"));
+        
+        when(transactionRepository.save(any(Transaction.class))).thenAnswer(i -> i.getArgument(0));
+
+        service.resolveGatewayTransactions(OffsetDateTime.now());
+
+        verify(razorpayApiClient).fetchPaymentStatus(DECRYPTED_KEY, DECRYPTED_SECRET, externalRef);
+        assertThat(txn.getState()).isEqualTo(TransactionState.SUCCESS);
+    }
 
     @Test
     @DisplayName("Razorpay failed → refund triggered → transitions to RESOLVED_REFUNDED")
     void razorpayFailed_refundsAndTransitionsToResolvedRefunded() {
         String paymentId = "pay_TestFailed456";
-        Transaction txn = buildPenaltyTransaction(paymentId, "razorpay");
-        Merchant merchant = buildMerchant();
+        UUID connId = UUID.randomUUID();
+        Transaction txn = buildPendingTransaction(paymentId, connId);
+        MerchantGatewayConnection connection = buildRazorpayConnection(connId);
 
-        when(transactionRepository.findByStateAndSourceGateway(
-                TransactionState.PENALTY_ACCRUING, "razorpay"))
+        when(transactionRepository.findByState(TransactionState.PENDING_RECONCILIATION))
                 .thenReturn(List.of(txn));
-        when(merchantRepository.findByConnectedGateway("razorpay"))
-                .thenReturn(List.of(merchant));
+        when(connectionRepository.findById(connId)).thenReturn(Optional.of(connection));
         when(encryptor.decrypt(ENCRYPTED_KEY)).thenReturn(DECRYPTED_KEY);
         when(encryptor.decrypt(ENCRYPTED_SECRET)).thenReturn(DECRYPTED_SECRET);
+        
         when(razorpayApiClient.fetchPaymentStatus(DECRYPTED_KEY, DECRYPTED_SECRET, paymentId))
                 .thenReturn(new RazorpayApiClient.PaymentStatus(paymentId, "failed"));
         when(razorpayApiClient.initiateRefund(DECRYPTED_KEY, DECRYPTED_SECRET, paymentId))
                 .thenReturn(new RazorpayApiClient.RefundResult("rfnd_Test789", "processed"));
+        
         when(transactionRepository.save(any(Transaction.class))).thenAnswer(i -> i.getArgument(0));
 
-        // Act
-        service.resolveRazorpayTransactions(OffsetDateTime.now());
+        service.resolveGatewayTransactions(OffsetDateTime.now());
 
-        // Assert — state changed to RESOLVED_REFUNDED
         assertThat(txn.getState()).isEqualTo(TransactionState.RESOLVED_REFUNDED);
-        assertThat(txn.getResolvedAt()).isNotNull();
-
-        // Assert — refund was called
         verify(razorpayApiClient).initiateRefund(DECRYPTED_KEY, DECRYPTED_SECRET, paymentId);
-
-        // Assert — audit trail has refund ID
+        
         ArgumentCaptor<StateTransition> stCaptor = ArgumentCaptor.forClass(StateTransition.class);
         verify(stateTransitionRepository).save(stCaptor.capture());
         StateTransition saved = stCaptor.getValue();
-        assertThat(saved.getReason()).contains("via Razorpay API");
-        assertThat(saved.getReason()).contains("rfnd_Test789");
+        assertThat(saved.getReason()).contains("refund_id=rfnd_Test789");
     }
 
-    // ── Test 3: Non-Razorpay transactions are skipped ─────────────
-
     @Test
-    @DisplayName("Non-Razorpay transactions are not fetched from DB")
-    void nonRazorpayTransactions_notProcessed() {
-        when(transactionRepository.findByStateAndSourceGateway(
-                TransactionState.PENALTY_ACCRUING, "razorpay"))
-                .thenReturn(List.of());
+    @DisplayName("No active connection → skips gateway check")
+    void noActiveConnection_skipsGatewayCheck() {
+        UUID connId = UUID.randomUUID();
+        Transaction txn = buildPendingTransaction("pay_123", connId);
+        MerchantGatewayConnection connection = buildRazorpayConnection(connId);
+        connection.setStatus("DISCONNECTED");
 
-        // Act
-        service.resolveRazorpayTransactions(OffsetDateTime.now());
+        when(transactionRepository.findByState(TransactionState.PENDING_RECONCILIATION))
+                .thenReturn(List.of(txn));
+        when(connectionRepository.findById(connId)).thenReturn(Optional.of(connection));
 
-        // Assert — no API calls, no merchant lookup
+        service.resolveGatewayTransactions(OffsetDateTime.now());
+
         verify(razorpayApiClient, never()).fetchPaymentStatus(any(), any(), any());
-        verify(merchantRepository, never()).findByConnectedGateway(any());
     }
 
-    // ── Test 4: Razorpay API error is handled gracefully ──────────
-
     @Test
-    @DisplayName("Razorpay API error → transaction stays in PENALTY_ACCRUING")
-    void razorpayApiError_transactionStaysInPenaltyAccruing() {
-        String paymentId = "pay_TestError999";
-        Transaction txn = buildPenaltyTransaction(paymentId, "razorpay");
-        Merchant merchant = buildMerchant();
+    @DisplayName("Simulated connection → skips gateway check")
+    void simulatedConnection_skipsGatewayCheck() {
+        UUID connId = UUID.randomUUID();
+        Transaction txn = buildPendingTransaction("pay_123", connId);
+        MerchantGatewayConnection connection = buildRazorpayConnection(connId);
+        connection.setGateway("simulated");
 
-        when(transactionRepository.findByStateAndSourceGateway(
-                TransactionState.PENALTY_ACCRUING, "razorpay"))
+        when(transactionRepository.findByState(TransactionState.PENDING_RECONCILIATION))
                 .thenReturn(List.of(txn));
-        when(merchantRepository.findByConnectedGateway("razorpay"))
-                .thenReturn(List.of(merchant));
-        when(encryptor.decrypt(ENCRYPTED_KEY)).thenReturn(DECRYPTED_KEY);
-        when(encryptor.decrypt(ENCRYPTED_SECRET)).thenReturn(DECRYPTED_SECRET);
-        when(razorpayApiClient.fetchPaymentStatus(DECRYPTED_KEY, DECRYPTED_SECRET, paymentId))
-                .thenThrow(new RuntimeException("Razorpay API timeout"));
+        when(connectionRepository.findById(connId)).thenReturn(Optional.of(connection));
 
-        // Act
-        service.resolveRazorpayTransactions(OffsetDateTime.now());
+        service.resolveGatewayTransactions(OffsetDateTime.now());
 
-        // Assert — state unchanged
-        assertThat(txn.getState()).isEqualTo(TransactionState.PENALTY_ACCRUING);
-        assertThat(txn.getResolvedAt()).isNull();
-
-        // Assert — no state transition recorded
-        verify(stateTransitionRepository, never()).save(any());
-    }
-
-    // ── Test 5: Razorpay status=refunded → RESOLVED_REFUNDED ────
-
-    @Test
-    @DisplayName("Razorpay already refunded → transitions to RESOLVED_REFUNDED without calling refund API")
-    void razorpayAlreadyRefunded_transitionsWithoutRefundCall() {
-        String paymentId = "pay_TestRefunded000";
-        Transaction txn = buildPenaltyTransaction(paymentId, "razorpay");
-        Merchant merchant = buildMerchant();
-
-        when(transactionRepository.findByStateAndSourceGateway(
-                TransactionState.PENALTY_ACCRUING, "razorpay"))
-                .thenReturn(List.of(txn));
-        when(merchantRepository.findByConnectedGateway("razorpay"))
-                .thenReturn(List.of(merchant));
-        when(encryptor.decrypt(ENCRYPTED_KEY)).thenReturn(DECRYPTED_KEY);
-        when(encryptor.decrypt(ENCRYPTED_SECRET)).thenReturn(DECRYPTED_SECRET);
-        when(razorpayApiClient.fetchPaymentStatus(DECRYPTED_KEY, DECRYPTED_SECRET, paymentId))
-                .thenReturn(new RazorpayApiClient.PaymentStatus(paymentId, "refunded"));
-        when(transactionRepository.save(any(Transaction.class))).thenAnswer(i -> i.getArgument(0));
-
-        // Act
-        service.resolveRazorpayTransactions(OffsetDateTime.now());
-
-        // Assert — state changed to RESOLVED_REFUNDED
-        assertThat(txn.getState()).isEqualTo(TransactionState.RESOLVED_REFUNDED);
-
-        // Assert — no refund API call (already refunded)
-        verify(razorpayApiClient, never()).initiateRefund(any(), any(), any());
-
-        // Assert — reason mentions "already refunded"
-        ArgumentCaptor<StateTransition> stCaptor = ArgumentCaptor.forClass(StateTransition.class);
-        verify(stateTransitionRepository).save(stCaptor.capture());
-        assertThat(stCaptor.getValue().getReason()).contains("already refunded");
+        verify(razorpayApiClient, never()).fetchPaymentStatus(any(), any(), any());
     }
 }

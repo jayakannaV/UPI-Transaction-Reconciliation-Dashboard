@@ -83,7 +83,13 @@ public class StateMachine {
         penaltyAccruing.put(TransactionEvent.ESCALATION_THRESHOLD_HIT,        TransactionState.ESCALATED);
         penaltyAccruing.put(TransactionEvent.GATEWAY_STATUS_CHECK_SUCCESS,    TransactionState.SUCCESS);
         penaltyAccruing.put(TransactionEvent.GATEWAY_REFUND_COMPLETED,        TransactionState.RESOLVED_REFUNDED);
+        penaltyAccruing.put(TransactionEvent.MANUAL_PENALTY_RECEIVED,         TransactionState.RESOLVED_REFUNDED);
         table.put(TransactionState.PENALTY_ACCRUING, Collections.unmodifiableMap(penaltyAccruing));
+
+        // ESCALATED → 1 possible event (manual reconciliation)
+        var escalated = new EnumMap<TransactionEvent, TransactionState>(TransactionEvent.class);
+        escalated.put(TransactionEvent.MANUAL_PENALTY_RECEIVED, TransactionState.RESOLVED_REFUNDED);
+        table.put(TransactionState.ESCALATED, Collections.unmodifiableMap(escalated));
 
         TRANSITIONS = Collections.unmodifiableMap(table);
     }

@@ -1,41 +1,34 @@
 package com.upi.reconcile.connectors.api;
 
-import com.upi.reconcile.connectors.crypto.AesGcmEncryptor;
-import com.upi.reconcile.connectors.domain.Merchant;
-import com.upi.reconcile.connectors.domain.MerchantRepository;
-import jakarta.validation.Valid;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnection;
+import com.upi.reconcile.connectors.domain.MerchantGatewayConnectionRepository;
+import com.upi.reconcile.domain.ProvisionalRefundRepository;
+import com.upi.reconcile.domain.RecoveryStatus;
+import com.upi.reconcile.security.MerchantContextHolder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.security.SecureRandom;
-import java.time.OffsetDateTime;
-import java.util.HexFormat;
+import java.math.BigDecimal;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
- * Merchant onboarding endpoint.
+ * Merchant information and summary endpoints.
  *
  * <pre>
- * POST /api/merchants/connect
- *   body: { gateway, api_key, api_secret, name? }
- *   → 200 { merchant_id, webhook_url, webhook_secret }
+ * GET /api/merchants/connected-gateways   → list active gateways
+ * GET /api/merchants/provisional-summary  → pending recovery totals
  * </pre>
  *
- * <p>A cryptographically secure 32-byte webhook secret is auto-generated at
- * connection time, stored on the Merchant entity, and returned once in the
- * response. The merchant must copy this secret into their gateway's webhook
- * configuration form for HMAC-SHA256 signature verification.
- * <p>Encrypts the merchant's API key and secret using AES-256-GCM before
- * persisting to the {@code merchants} table, then returns a webhook URL
- * the merchant should register with their payment gateway dashboard.
+ * <p>
+ * Gateway connection lifecycle (connect/disconnect/reconnect) has moved
+ * to {@link ConnectionController} at {@code /api/connections}.
  */
 @Slf4j
 @RestController
@@ -43,76 +36,51 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class MerchantController {
 
-    private static final Set<String> SUPPORTED_GATEWAYS = Set.of("razorpay", "payu", "cashfree");
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+        private final MerchantGatewayConnectionRepository connectionRepository;
+        private final ProvisionalRefundRepository provisionalRefundRepository;
 
-    private final MerchantRepository merchantRepository;
-    private final AesGcmEncryptor encryptor;
+        /**
+         * Returns the gateways actively connected by the current merchant.
+         *
+         * <pre>
+         * GET /api/merchants/connected-gateways
+         *   → 200 ["razorpay", "payu"]
+         * </pre>
+         */
+        @GetMapping("/connected-gateways")
+        public ResponseEntity<List<String>> getConnectedGateways() {
+                UUID merchantId = MerchantContextHolder.currentMerchantId();
 
-    @PostMapping("/connect")
-    public ResponseEntity<MerchantConnectResponse> connectMerchant(
-            @Valid @RequestBody MerchantConnectRequest request) {
+                List<String> gateways = connectionRepository
+                                .findByMerchant_MerchantId(merchantId)
+                                .stream()
+                                .filter(c -> MerchantGatewayConnection.STATUS_ACTIVE.equals(c.getStatus()))
+                                .map(MerchantGatewayConnection::getGateway)
+                                .collect(Collectors.toList());
 
-        String gateway = request.getGateway().toLowerCase().trim();
-        if (!SUPPORTED_GATEWAYS.contains(gateway)) {
-            return ResponseEntity.badRequest().build();
+                return ResponseEntity.ok(gateways);
         }
 
-        UUID merchantId = UUID.randomUUID();
-        String name = (request.getName() != null && !request.getName().isBlank())
-                ? request.getName()
-                : "Merchant-" + merchantId.toString().substring(0, 8);
+        /**
+         * Returns the running total of provisional refunds still awaiting
+         * bank recovery ({@code PENDING_FROM_BANK}).
+         *
+         * <pre>
+         * GET /api/merchants/provisional-summary
+         *   → 200 { "total_pending_recovery": 12500.00, "count": 5 }
+         * </pre>
+         */
+        @GetMapping("/provisional-summary")
+        public ResponseEntity<Map<String, Object>> getProvisionalSummary() {
+                log.info("GET /api/merchants/provisional-summary");
 
-        // Encrypt credentials before storing
-        String encryptedApiKey = encryptor.encrypt(request.getApiKey());
-        String encryptedApiSecret = encryptor.encrypt(request.getApiSecret());
+                BigDecimal totalPending = provisionalRefundRepository
+                                .sumAmountByRecoveryStatus(RecoveryStatus.PENDING_FROM_BANK);
+                long count = provisionalRefundRepository
+                                .countByRecoveryStatus(RecoveryStatus.PENDING_FROM_BANK);
 
-        // Generate a cryptographically secure 32-byte webhook secret
-        byte[] secretBytes = new byte[32];
-        SECURE_RANDOM.nextBytes(secretBytes);
-        String webhookSecret = HexFormat.of().formatHex(secretBytes);
-
-        Merchant merchant = Merchant.builder()
-                .merchantId(merchantId)
-                .name(name)
-                .connectedGateway(gateway)
-                .encryptedApiKey(encryptedApiKey)
-                .encryptedApiSecret(encryptedApiSecret)
-                .webhookSecret(webhookSecret)
-                .createdAt(OffsetDateTime.now())
-                .build();
-        merchantRepository.save(merchant);
-
-        String webhookUrl = String.format("/api/connectors/%s/webhook?merchant_id=%s",
-                gateway, merchantId);
-
-        log.info("Merchant connected — id={}, gateway={}, webhook_url={}",
-                merchantId, gateway, webhookUrl);
-
-        MerchantConnectResponse response = MerchantConnectResponse.builder()
-                .merchantId(merchantId)
-                .webhookUrl(webhookUrl)
-                .webhookSecret(webhookSecret)
-                .build();
-
-        return ResponseEntity.ok(response);
-    }
-
-    /**
-     * Returns the list of gateway names that have at least one connected merchant.
-     * Used by the frontend to show "Already Connected" badges.
-     *
-     * <pre>
-     * GET /api/merchants/connected-gateways
-     *   → 200 ["razorpay", "payu"]
-     * </pre>
-     */
-    @GetMapping("/connected-gateways")
-    public ResponseEntity<List<String>> getConnectedGateways() {
-        List<String> gateways = merchantRepository.findAll().stream()
-                .map(Merchant::getConnectedGateway)
-                .distinct()
-                .toList();
-        return ResponseEntity.ok(gateways);
-    }
+                return ResponseEntity.ok(Map.of(
+                                "total_pending_recovery", totalPending,
+                                "count", count));
+        }
 }
