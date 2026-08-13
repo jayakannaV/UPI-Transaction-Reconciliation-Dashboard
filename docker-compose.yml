@@ -82,6 +82,7 @@ services:
       - 8.8.8.8
       - 8.8.4.4
     environment:
+      SPRING_PROFILES_ACTIVE: demo
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/upi_reconcile
       SPRING_DATASOURCE_USERNAME: postgres
       SPRING_DATASOURCE_PASSWORD: postgres

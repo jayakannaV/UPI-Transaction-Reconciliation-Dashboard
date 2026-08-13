@@ -14,6 +14,8 @@ import type { TransactionDto, PageResponse } from './api/types';
 import { useAuth } from './contexts/AuthContext';
 import { Login } from './components/Login';
 import { Signup } from './components/Signup';
+import { ChaosControl } from './components/ChaosControl';
+
 
 // ProtectedRoute component
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -151,6 +153,12 @@ function App() {
         <Route path="/connections" element={
           <ProtectedRoute>
             <ConnectionsPage onConnected={handleGatewayConnected} />
+          </ProtectedRoute>
+        } />
+
+        <Route path="/chaos" element={
+          <ProtectedRoute>
+            <ChaosControl />
           </ProtectedRoute>
         } />
         
