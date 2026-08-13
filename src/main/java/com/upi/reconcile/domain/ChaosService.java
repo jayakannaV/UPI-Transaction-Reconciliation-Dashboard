@@ -113,15 +113,10 @@ public class ChaosService {
      */
     @Transactional
     public Transaction createDeemedApproved(UUID merchantId) {
-        // Find first ACTIVE connection for this merchant (any gateway)
-        List<MerchantGatewayConnection> connections = connectionRepository
-                .findByMerchant_MerchantId(merchantId);
-        Optional<MerchantGatewayConnection> activeConn = connections.stream()
-                .filter(c -> MerchantGatewayConnection.STATUS_ACTIVE.equals(c.getStatus()))
-                .findFirst();
-
-        String gateway = activeConn.map(MerchantGatewayConnection::getGateway).orElse("simulated");
-        UUID connectionId = activeConn.map(MerchantGatewayConnection::getConnectionId).orElse(null);
+        // Always use simulated gateway — real gateway connections would
+        // auto-resolve via gateway status check, defeating the demo
+        String gateway = "simulated";
+        UUID connectionId = null;
 
         // Pick default bank IDs (the first two available banks)
         List<Bank> banks = bankRepository.findAll();
@@ -171,6 +166,15 @@ public class ChaosService {
         if (txn.getState() != TransactionState.PENDING_RECONCILIATION) {
             throw new IllegalStateException(
                     "Transaction must be in PENDING_RECONCILIATION state, but is " + txn.getState());
+        }
+
+        // Reject if transaction is linked to a real gateway connection —
+        // the GatewayResolutionService would auto-resolve it via the real
+        // API, defeating the purpose of the TAT-breach demo
+        if (txn.getSourceGateway() != null && !"simulated".equals(txn.getSourceGateway())) {
+            throw new IllegalStateException(
+                    "Force-breach only applies to simulated transactions — "
+                    + "use Seed Demo Data or create a new simulated transaction");
         }
 
         // Set the deadline to 3 seconds from now — the next scheduler tick
@@ -358,15 +362,11 @@ public class ChaosService {
         UUID remitterBankId = banks.get(0).getBankId();
         UUID beneficiaryBankId = banks.get(1).getBankId();
 
-        // Find merchant's first ACTIVE connection
-        List<MerchantGatewayConnection> connections = connectionRepository
-                .findByMerchant_MerchantId(merchantId);
-        Optional<MerchantGatewayConnection> activeConn = connections.stream()
-                .filter(c -> MerchantGatewayConnection.STATUS_ACTIVE.equals(c.getStatus()))
-                .findFirst();
-
-        String gateway = activeConn.map(MerchantGatewayConnection::getGateway).orElse("simulated");
-        UUID connectionId = activeConn.map(MerchantGatewayConnection::getConnectionId).orElse(null);
+        // Always use simulated gateway for seed data — real gateway connections
+        // would trigger GatewayResolutionService API calls on the fabricated
+        // idempotency keys, and the complaint generator would reject them
+        String gateway = "simulated";
+        UUID connectionId = null;
 
         List<Transaction> result = new ArrayList<>();
         OffsetDateTime now = OffsetDateTime.now();

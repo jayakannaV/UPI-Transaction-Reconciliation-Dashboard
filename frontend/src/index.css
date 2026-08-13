@@ -1149,6 +1149,18 @@ body {
   padding: 24px;
 }
 
+.complaint-disclaimer {
+  background: hsl(210 60% 16%);
+  border: 1px solid hsl(210 50% 28%);
+  border-left: 3px solid hsl(210 80% 55%);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: hsl(210 30% 78%);
+  margin-bottom: 16px;
+}
+
 .complaint-text {
   background: var(--bg-primary);
   border: 1px solid var(--border-subtle);
@@ -1166,8 +1178,36 @@ body {
   display: flex;
   gap: 12px;
   justify-content: flex-end;
+  flex-wrap: wrap;
   padding: 16px 24px;
   border-top: 1px solid var(--border-subtle);
+}
+
+.btn-email-draft {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  background: linear-gradient(135deg, #0d9488, #14b8a6);
+  color: #fff;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(13, 148, 136, 0.25);
+}
+
+.btn-email-draft:hover {
+  background: linear-gradient(135deg, #0f766e, #0d9488);
+  box-shadow: 0 4px 14px rgba(13, 148, 136, 0.35);
+  transform: translateY(-1px);
+}
+
+.btn-email-draft:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 6px rgba(13, 148, 136, 0.2);
 }
 
 @keyframes scaleIn {

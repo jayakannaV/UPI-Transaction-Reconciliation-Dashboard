@@ -16,6 +16,7 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
   const [history, setHistory] = useState<StateTransitionDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [complaintText, setComplaintText] = useState<string | null>(null);
+  const [grievanceEmail, setGrievanceEmail] = useState<string | null>(null);
   const [generatingComplaint, setGeneratingComplaint] = useState(false);
   const [refundLoading, setRefundLoading] = useState(false);
   const [refundSuccess, setRefundSuccess] = useState(false);
@@ -47,6 +48,7 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
       setGeneratingComplaint(true);
       const result = await generateComplaint(txnId);
       setComplaintText(result.complaint);
+      setGrievanceEmail(result.grievanceEmail ?? null);
     } catch (err) {
       console.error('Failed to generate complaint:', err);
     } finally {
@@ -61,7 +63,7 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
 
   const isGatewayResolved = transaction
     ? !!transaction.sourceGateway
-        && ['PENALTY_ACCRUING', 'ESCALATED'].includes(transaction.state)
+        && transaction.state === 'RESOLVED_REFUNDED'
     : false;
 
   const REFUND_ELIGIBLE_STATES = ['DEEMED_APPROVED', 'PENDING_RECONCILIATION', 'PENALTY_ACCRUING'];
@@ -199,7 +201,7 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
                       Generating...
                     </>
                   ) : (
-                    <>📋 Generate RBI Complaint</>
+                    <>📋 Generate Complaint Draft</>
                   )}
                 </button>
               )}
@@ -209,7 +211,7 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
                 <div className="gateway-resolved-banner" id="gateway-resolved-badge">
                   <span className="gateway-resolved-banner__icon">⚡</span>
                   <span>
-                    Auto-resolved via gateway ({transaction.sourceGateway}) — no complaint applicable
+                    Auto-resolved via gateway ({transaction.sourceGateway}) — no draft needed
                   </span>
                 </div>
               )}
@@ -301,7 +303,9 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
       {complaintText && (
         <ComplaintModal
           complaintText={complaintText}
-          onClose={() => setComplaintText(null)}
+          grievanceEmail={grievanceEmail}
+          txnId={txnId}
+          onClose={() => { setComplaintText(null); setGrievanceEmail(null); }}
         />
       )}
     </>

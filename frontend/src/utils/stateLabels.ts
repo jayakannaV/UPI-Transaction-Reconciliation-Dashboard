@@ -77,7 +77,7 @@ const STATE_MAP: Record<string, StateDisplay> = {
     showComplaintAction: false,
   },
   ESCALATED: {
-    label: 'Complaint filed',
+    label: 'Complaint draft ready',
     emoji: '📋',
     variant: 'purple',
     showComplaintAction: true,

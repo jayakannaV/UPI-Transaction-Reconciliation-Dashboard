@@ -95,7 +95,7 @@ public class BankSeedRunner implements CommandLineRunner {
                 }
 
                 // CSV format: bank_name, historical_bd_rate, historical_td_rate,
-                //             historical_deemed_approved_rate, source_note
+                //             historical_deemed_approved_rate, grievance_email, source_note
                 // source_note may contain commas inside quotes, so we split carefully.
                 String[] parts = parseCsvLine(trimmed);
                 if (parts.length < 4) {
@@ -108,9 +108,14 @@ public class BankSeedRunner implements CommandLineRunner {
                 BigDecimal tdRate = new BigDecimal(parts[2].trim());
                 BigDecimal deemedApprovedRate = new BigDecimal(parts[3].trim());
 
-                // Log source_note if present (column 5) — not persisted to DB
-                if (parts.length >= 5 && !parts[4].trim().isEmpty()) {
-                    log.info("  {} — source: {}", bankName, parts[4].trim());
+                // grievance_email (column 5) — nullable
+                String grievanceEmail = parts.length >= 5 && !parts[4].trim().isEmpty()
+                        ? parts[4].trim()
+                        : null;
+
+                // Log source_note if present (column 6) — not persisted to DB
+                if (parts.length >= 6 && !parts[5].trim().isEmpty()) {
+                    log.info("  {} — source: {}", bankName, parts[5].trim());
                 }
 
                 banks.add(Bank.builder()
@@ -119,6 +124,7 @@ public class BankSeedRunner implements CommandLineRunner {
                         .historicalBdRate(bdRate)
                         .historicalTdRate(tdRate)
                         .historicalDeemedApprovedRate(deemedApprovedRate)
+                        .grievanceEmail(grievanceEmail)
                         .build());
             }
         }
@@ -139,25 +145,27 @@ public class BankSeedRunner implements CommandLineRunner {
         List<Bank> banks = new ArrayList<>();
 
         // PLACEHOLDER: All rates below are illustrative. Replace with real NPCI data.
-        banks.add(placeholder("State Bank of India",        "0.0045", "0.0008", "0.0012")); // PLACEHOLDER
-        banks.add(placeholder("HDFC Bank Ltd.",             "0.0058", "0.0009", "0.0012")); // PLACEHOLDER
-        banks.add(placeholder("ICICI Bank Ltd.",            "0.0071", "0.0009", "0.0012")); // PLACEHOLDER
-        banks.add(placeholder("Axis Bank Ltd.",             "0.0074", "0.0010", "0.0015")); // PLACEHOLDER
-        banks.add(placeholder("Paytm Payments Bank Ltd.",   "0.0110", "0.0012", "0.0018")); // PLACEHOLDER
-        banks.add(placeholder("Yes Bank Ltd.",              "0.0065", "0.0011", "0.0014")); // PLACEHOLDER
-        banks.add(placeholder("Kotak Mahindra Bank",        "0.0089", "0.0008", "0.0012")); // PLACEHOLDER
-        banks.add(placeholder("Punjab National Bank",       "0.0038", "0.0007", "0.0010")); // PLACEHOLDER
+        // Grievance emails are real, publicly documented addresses where available.
+        banks.add(placeholder("State Bank of India",        "0.0045", "0.0008", "0.0012", "gm.customer@sbi.co.in"));    // PLACEHOLDER rates; real email
+        banks.add(placeholder("HDFC Bank Ltd.",             "0.0058", "0.0009", "0.0012", null));                        // PLACEHOLDER; web-form-only
+        banks.add(placeholder("ICICI Bank Ltd.",            "0.0071", "0.0009", "0.0012", "pno@icicibank.com"));         // PLACEHOLDER rates; real email
+        banks.add(placeholder("Axis Bank Ltd.",             "0.0074", "0.0010", "0.0015", "nodal.officer@axisbank.com")); // PLACEHOLDER rates; real email
+        banks.add(placeholder("Paytm Payments Bank Ltd.",   "0.0110", "0.0012", "0.0018", null));                        // PLACEHOLDER; no public email
+        banks.add(placeholder("Yes Bank Ltd.",              "0.0065", "0.0011", "0.0014", null));                        // PLACEHOLDER; no public email
+        banks.add(placeholder("Kotak Mahindra Bank",        "0.0089", "0.0008", "0.0012", "nodalofficer@kotak.com"));    // PLACEHOLDER rates; real email
+        banks.add(placeholder("Punjab National Bank",       "0.0038", "0.0007", "0.0010", null));                        // PLACEHOLDER; no public email
 
         return banks;
     }
 
-    private Bank placeholder(String name, String bdRate, String tdRate, String deemedRate) {
+    private Bank placeholder(String name, String bdRate, String tdRate, String deemedRate, String grievanceEmail) {
         return Bank.builder()
                 .bankId(deterministicUuid(name))
                 .name(name)
                 .historicalBdRate(new BigDecimal(bdRate))
                 .historicalTdRate(new BigDecimal(tdRate))
                 .historicalDeemedApprovedRate(new BigDecimal(deemedRate))
+                .grievanceEmail(grievanceEmail)
                 .build();
     }
 

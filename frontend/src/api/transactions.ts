@@ -25,8 +25,8 @@ export function getTransactionHistory(
 
 export function generateComplaint(
   txnId: string
-): Promise<{ complaint: string }> {
-  return apiFetch<{ complaint: string }>(
+): Promise<{ complaint: string; grievanceEmail?: string }> {
+  return apiFetch<{ complaint: string; grievanceEmail?: string }>(
     `/transactions/${txnId}/generate-complaint`,
     { method: 'POST' }
   );

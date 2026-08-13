@@ -14,7 +14,7 @@ const STATE_FILTERS = [
   { value: 'PENALTY_ACCRUING', label: 'Stuck payments' },
   { value: 'TAT_BREACHED', label: 'Deadline missed' },
   { value: 'PENDING_RECONCILIATION', label: 'Under review' },
-  { value: 'ESCALATED', label: 'Complaint filed' },
+  { value: 'ESCALATED', label: 'Draft ready' },
   { value: 'RESOLVED_REFUNDED', label: 'Refunded' },
   { value: 'SUCCESS', label: 'Successful' },
 ];

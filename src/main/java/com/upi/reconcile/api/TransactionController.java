@@ -179,7 +179,18 @@ public class TransactionController {
                                 : provisionalRefunds.getFirst();
 
                 String complaint = buildComplaintText(txn, provisionalRefund);
-                return ResponseEntity.ok(Map.of("complaint", complaint));
+
+                // Look up the beneficiary bank's grievance email (complaints target the beneficiary)
+                String grievanceEmail = txn.getBeneficiaryBank() != null
+                        ? txn.getBeneficiaryBank().getGrievanceEmail()
+                        : null;
+
+                java.util.Map<String, String> response = new java.util.LinkedHashMap<>();
+                response.put("complaint", complaint);
+                if (grievanceEmail != null) {
+                        response.put("grievanceEmail", grievanceEmail);
+                }
+                return ResponseEntity.ok(response);
         }
 
         // ── POST /api/transactions/{txnId}/provisional-refund ─────────
