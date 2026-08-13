@@ -164,6 +164,41 @@ class ChaosControllerMerchantIsolationTest {
     }
 
     @Test
+    @DisplayName("simulate-missed-webhook: No prior Razorpay SUCCESS transaction → 400")
+    void simulateMissedWebhook_noPriorTxn_returns400() throws Exception {
+        when(chaosService.simulateMissedWebhook(MERCHANT_A_ID))
+                .thenThrow(new IllegalStateException(
+                        "Send one real test payment through Razorpay checkout first, then this action will be available."));
+
+        mockMvc.perform(post("/api/chaos/simulate-missed-webhook"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value(
+                        "Send one real test payment through Razorpay checkout first, then this action will be available."));
+    }
+
+    @Test
+    @DisplayName("simulate-missed-webhook: Valid prior txn exists → 200 with new staged txn")
+    void simulateMissedWebhook_valid_succeeds() throws Exception {
+        Transaction staged = Transaction.builder()
+                .txnId(UUID.randomUUID())
+                .idempotencyKey("chaos-demo-abcdef12")
+                .state(TransactionState.PENDING_RECONCILIATION)
+                .amountInr(new BigDecimal("500.00"))
+                .sourceGateway("razorpay")
+                .createdAt(OffsetDateTime.now())
+                .build();
+
+        when(chaosService.simulateMissedWebhook(MERCHANT_A_ID))
+                .thenReturn(staged);
+
+        mockMvc.perform(post("/api/chaos/simulate-missed-webhook"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.txnId").value(staged.getTxnId().toString()))
+                .andExpect(jsonPath("$.state").value("PENDING_RECONCILIATION"))
+                .andExpect(jsonPath("$.sourceGateway").value("razorpay"));
+    }
+
+    @Test
     @DisplayName("Unauthenticated request to chaos endpoint → denied (401 or 403)")
     void unauthenticated_returnsDenied() throws Exception {
         // Perform the request as an anonymous user — no JWT present.

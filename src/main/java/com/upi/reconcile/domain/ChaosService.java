@@ -168,14 +168,8 @@ public class ChaosService {
                     "Transaction must be in PENDING_RECONCILIATION state, but is " + txn.getState());
         }
 
-        // Reject if transaction is linked to a real gateway connection —
-        // the GatewayResolutionService would auto-resolve it via the real
-        // API, defeating the purpose of the TAT-breach demo
-        if (txn.getSourceGateway() != null && !"simulated".equals(txn.getSourceGateway())) {
-            throw new IllegalStateException(
-                    "Force-breach only applies to simulated transactions — "
-                    + "use Seed Demo Data or create a new simulated transaction");
-        }
+        // Remove restriction: we now allow force-breach on real gateway transactions 
+        // to speed up demo reconciliation cycles for real API checks as well.
 
         // Set the deadline to 3 seconds from now — the next scheduler tick
         // (every 7 seconds) will breach it
@@ -338,7 +332,54 @@ public class ChaosService {
         return response;
     }
 
-    // ── 6. Seed Demo Data ────────────────────────────────────────────────
+    // ── 6. Simulate Missed Webhook ───────────────────────────────────────
+
+    /**
+     * Stages a transaction as "webhook missed" using a REAL previously-captured
+     * Razorpay payment reference, rather than a fabricated one.
+     */
+    @Transactional
+    public Transaction simulateMissedWebhook(UUID merchantId) {
+        // Requires the current merchant to have at least one existing transaction with gateway="razorpay" and state=SUCCESS
+        Optional<Transaction> txnOpt = transactionRepository.findFirstByMerchantOwner_MerchantIdAndSourceGatewayAndStateOrderByCreatedAtDesc(merchantId, "razorpay", TransactionState.SUCCESS);
+        if (txnOpt.isEmpty()) {
+            throw new IllegalStateException("Send one real test payment through Razorpay checkout first, then this action will be available.");
+        }
+        
+        Transaction source = txnOpt.get();
+        
+        // Pick that merchant's most recent real SUCCESS Razorpay transaction and read its external_payment_ref (or idempotency_key if null).
+        String externalRef = source.getExternalPaymentRef() != null ? source.getExternalPaymentRef() : source.getIdempotencyKey();
+        
+        // Create new transaction row
+        Transaction txn = new Transaction();
+        txn.setTxnId(UUID.randomUUID());
+        txn.setIdempotencyKey("chaos-demo-" + UUID.randomUUID().toString().substring(0, 8));
+        txn.setExternalPaymentRef(externalRef);
+        txn.setConnectionId(source.getConnectionId());
+        txn.setState(TransactionState.PENDING_RECONCILIATION);
+        
+        // Set other required fields from source (banks, amount, etc.)
+        txn.setMerchantOwner(source.getMerchantOwner());
+        txn.setRemitterBank(source.getRemitterBank());
+        txn.setBeneficiaryBank(source.getBeneficiaryBank());
+        txn.setAmountInr(source.getAmountInr());
+        txn.setSourceGateway(source.getSourceGateway());
+        txn.setCreatedAt(OffsetDateTime.now());
+        
+        log.info("🎯 Chaos simulate-missed-webhook — staged txn={} with externalRef={}", txn.getTxnId(), externalRef);
+        
+        // Save directly
+        Transaction saved = transactionRepository.save(txn);
+        
+        // Log the initial state transition so it shows up in history
+        recordTransition(saved, null, TransactionState.PENDING_RECONCILIATION, 
+                "Chaos simulate-missed-webhook (staged for recovery)", OffsetDateTime.now());
+                
+        return saved;
+    }
+
+    // ── 7. Seed Demo Data ────────────────────────────────────────────────
 
     /**
      * Creates a small mixed batch of transactions for the current merchant:

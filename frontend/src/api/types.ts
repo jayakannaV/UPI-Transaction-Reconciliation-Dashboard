@@ -20,6 +20,7 @@ export interface TransactionDto {
   sourceGateway: string | null;
   gateway?: string | null;
   connectionStatus?: string | null;
+  resolutionReason?: string | null;
 }
 
 export interface PageResponse<T> {

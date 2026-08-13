@@ -170,7 +170,29 @@ public class ChaosController {
         }
     }
 
-    // ── 6. Seed Demo Data ────────────────────────────────────────────────
+    // ── 6. Simulate Missed Webhook ───────────────────────────────────────
+
+    /**
+     * Stages a transaction as "webhook missed" using a REAL previously-captured
+     * Razorpay payment reference, rather than a fabricated one.
+     */
+    @PostMapping("/simulate-missed-webhook")
+    public ResponseEntity<?> simulateMissedWebhook() {
+        UUID merchantId = MerchantContextHolder.currentMerchantId();
+        try {
+            Transaction txn = chaosService.simulateMissedWebhook(merchantId);
+            return ResponseEntity.ok(txnToMap(txn));
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("Chaos simulate-missed-webhook failed", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("error", "Failed to simulate missed webhook: " + e.getMessage()));
+        }
+    }
+
+    // ── 7. Seed Demo Data ────────────────────────────────────────────────
 
     /**
      * Convenience endpoint that creates a small realistic mixed batch so the

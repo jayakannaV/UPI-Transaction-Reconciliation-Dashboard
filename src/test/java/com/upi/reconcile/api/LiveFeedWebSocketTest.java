@@ -48,6 +48,7 @@ class LiveFeedWebSocketTest {
                                 BENEFICIARY_ID,
                                 TIMESTAMP,
                                 null,
+                                null,
                                 null);
 
                 handler.onStateChange(event);
@@ -79,6 +80,7 @@ class LiveFeedWebSocketTest {
                                 BENEFICIARY_ID,
                                 TIMESTAMP,
                                 null,
+                                null,
                                 null);
 
                 handler.onStateChange(event);
@@ -105,6 +107,7 @@ class LiveFeedWebSocketTest {
                                 BANK_ID,
                                 BENEFICIARY_ID,
                                 TIMESTAMP,
+                                null,
                                 null,
                                 null);
 

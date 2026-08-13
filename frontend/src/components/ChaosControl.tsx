@@ -8,7 +8,8 @@ import {
   forceBreach,
   createDeemedApproved,
   triggerAnomaly,
-  simulateRazorpayPayment
+  simulateRazorpayPayment,
+  simulateMissedWebhook
 } from '../api/chaos';
 import type { TransactionDto, BankScorecardDto } from '../api/types';
 import type { ConnectionDto } from '../api/connections';
@@ -81,6 +82,9 @@ export function ChaosControl() {
   const handleSimulateRazorpay = () => 
     wrapAction('simulate_razorpay', simulateRazorpayPayment, 'Razorpay payment simulated!');
 
+  const handleSimulateMissedWebhook = () => 
+    wrapAction('simulate_missed_webhook', simulateMissedWebhook, 'Staged — this will resolve via a real Razorpay API call on the next check cycle.');
+
   const handleFireDuplicate = (txnId: string) => 
     wrapAction(`duplicate_${txnId}`, () => fireDuplicate(txnId), 'Duplicate fired!');
 
@@ -139,6 +143,19 @@ export function ChaosControl() {
               style={{ ...btnStyle, opacity: !isRazorpayActive ? 0.5 : 1 }}
             >
               {loadingAction === 'simulate_razorpay' ? 'Simulating...' : 'Simulate Razorpay Payment'}
+            </button>
+            {!isRazorpayActive && (
+              <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>Connect Razorpay to enable</span>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+            <button 
+              onClick={handleSimulateMissedWebhook}
+              disabled={loadingAction === 'simulate_missed_webhook' || !isRazorpayActive}
+              style={{ ...btnStyle, opacity: !isRazorpayActive ? 0.5 : 1 }}
+            >
+              {loadingAction === 'simulate_missed_webhook' ? 'Staging...' : 'Simulate Missed Webhook (Real Gateway)'}
             </button>
             {!isRazorpayActive && (
               <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>Connect Razorpay to enable</span>

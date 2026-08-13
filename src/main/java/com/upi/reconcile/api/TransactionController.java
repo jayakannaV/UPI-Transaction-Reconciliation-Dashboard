@@ -11,6 +11,10 @@ import com.upi.reconcile.domain.Transaction;
 import com.upi.reconcile.domain.TransactionRepository;
 import com.upi.reconcile.domain.TransactionState;
 import com.upi.reconcile.security.MerchantContextHolder;
+import com.upi.reconcile.domain.StateMachine;
+import com.upi.reconcile.domain.TransactionEvent;
+import com.upi.reconcile.domain.TransactionStateChangedEvent;
+import org.springframework.context.ApplicationEventPublisher;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -67,6 +71,8 @@ public class TransactionController {
         private final ProvisionalRefundService provisionalRefundService;
         private final ProvisionalRefundRepository provisionalRefundRepository;
         private final MerchantGatewayConnectionRepository connectionRepository;
+        private final StateMachine stateMachine;
+        private final ApplicationEventPublisher eventPublisher;
 
         // ── GET /api/transactions ─────────────────────────────────────
 
@@ -165,25 +171,7 @@ public class TransactionController {
                                                                         + COMPLAINT_ELIGIBLE_STATES + " states"));
                 }
 
-                // Guard: transactions sourced from a payment gateway are auto-resolved
-                // via the gateway API — there is nothing to claim against the bank
-                if (txn.getSourceGateway() != null && !txn.getSourceGateway().isBlank() && !"simulated".equals(txn.getSourceGateway())) {
-                        boolean isDisconnected = false;
-                        if (txn.getConnectionId() != null) {
-                                MerchantGatewayConnection conn = connectionRepository.findById(txn.getConnectionId()).orElse(null);
-                                if (conn != null && "DISCONNECTED".equals(conn.getStatus())) {
-                                        isDisconnected = true;
-                                }
-                        }
-                        
-                        if (!isDisconnected) {
-                                return ResponseEntity.badRequest()
-                                                .body(Map.of("error",
-                                                                "This transaction is being auto-resolved via gateway ("
-                                                                                + txn.getSourceGateway()
-                                                                                + "). No complaint is applicable."));
-                        }
-                }
+
 
                 // Look up any provisional refund the merchant fronted
                 List<ProvisionalRefund> provisionalRefunds = provisionalRefundRepository.findByTransaction_TxnId(txnId);
@@ -203,6 +191,62 @@ public class TransactionController {
                         response.put("grievanceEmail", grievanceEmail);
                 }
                 return ResponseEntity.ok(response);
+        }
+
+        // ── POST /api/transactions/{txnId}/mark-penalty-received ─────────
+
+        @PostMapping("/{txnId}/mark-penalty-received")
+        @Transactional
+        public ResponseEntity<?> markPenaltyReceived(@PathVariable UUID txnId) {
+                log.info("Mark penalty received manually for txn {}", txnId);
+
+                Transaction txn = transactionRepository.findById(txnId).orElse(null);
+                if (txn == null) {
+                        return ResponseEntity.notFound().build();
+                }
+
+                UUID merchantId = MerchantContextHolder.currentMerchantId();
+                if (txn.getMerchantOwner() == null ||
+                        !txn.getMerchantOwner().getMerchantId().equals(merchantId)) {
+                        return ResponseEntity.notFound().build();
+                }
+
+                if (txn.getState() != TransactionState.PENALTY_ACCRUING && txn.getState() != TransactionState.ESCALATED) {
+                        return ResponseEntity.badRequest()
+                                .body(Map.of("error", "Only PENALTY_ACCRUING or ESCALATED transactions can be manually reconciled."));
+                }
+
+                TransactionState nextState = stateMachine.transition(txn.getState(), TransactionEvent.MANUAL_PENALTY_RECEIVED);
+
+                StateTransition transition = new StateTransition();
+                transition.setTransaction(txn);
+                transition.setFromState(txn.getState().name());
+                transition.setToState(nextState.name());
+                transition.setTransitionedAt(OffsetDateTime.now());
+                transition.setReason("Offline penalty settlement received by merchant");
+
+                txn.setState(nextState);
+                txn.setResolvedAt(OffsetDateTime.now());
+
+                transactionRepository.save(txn);
+                stateTransitionRepository.save(transition);
+
+                // Publish websocket event
+                eventPublisher.publishEvent(new TransactionStateChangedEvent(
+                        this,
+                        txn.getTxnId(),
+                        TransactionState.valueOf(transition.getFromState()),
+                        nextState,
+                        txn.getPenaltyAmountInr(),
+                        txn.getRemitterBank() != null ? txn.getRemitterBank().getBankId() : null,
+                        txn.getBeneficiaryBank() != null ? txn.getBeneficiaryBank().getBankId() : null,
+                        transition.getTransitionedAt(),
+                        merchantId,
+                        txn.getConnectionId(),
+                        transition.getReason()
+                ));
+
+                return ResponseEntity.ok(Map.of("message", "Penalty successfully marked as received."));
         }
 
         // ── POST /api/transactions/{txnId}/provisional-refund ─────────
@@ -301,6 +345,7 @@ public class TransactionController {
                                 .sourceGateway(txn.getSourceGateway())
                                 .gateway(gateway)
                                 .connectionStatus(connectionStatus)
+                                .resolutionReason(txn.getResolutionReason())
                                 .build();
         }
 

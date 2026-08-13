@@ -109,4 +109,12 @@ public class Transaction {
      */
     @Column(name = "connection_id")
     private UUID connectionId;
+
+    /** Descriptive reason for how this transaction was resolved. */
+    @Column(name = "resolution_reason", length = 1000)
+    private String resolutionReason;
+
+    /** External payment ID from the underlying gateway, if applicable. */
+    @Column(name = "external_payment_ref")
+    private String externalPaymentRef;
 }

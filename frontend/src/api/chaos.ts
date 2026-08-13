@@ -34,3 +34,9 @@ export function simulateRazorpayPayment(): Promise<any> {
     method: 'POST',
   });
 }
+
+export function simulateMissedWebhook(): Promise<TransactionDto> {
+  return apiFetch('/chaos/simulate-missed-webhook', {
+    method: 'POST',
+  });
+}

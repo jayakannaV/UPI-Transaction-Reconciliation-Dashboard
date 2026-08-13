@@ -64,7 +64,8 @@ public class LiveFeedWebSocketHandler {
                                 event.getRemitterBankId(),
                                 event.getTransitionedAt(),
                                 gateway,
-                                connectionStatus);
+                                connectionStatus,
+                                event.getResolutionReason());
 
                 // Route to per-merchant topic for tenant isolation
                 if (event.getMerchantId() != null) {
@@ -114,7 +115,8 @@ public class LiveFeedWebSocketHandler {
                         UUID bankId,
                         OffsetDateTime timestamp,
                         String gateway,
-                        String connectionStatus) {
+                        String connectionStatus,
+                        String resolutionReason) {
         }
 
         /**

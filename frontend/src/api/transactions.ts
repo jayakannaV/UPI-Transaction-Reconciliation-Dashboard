@@ -44,3 +44,12 @@ export function createProvisionalRefund(
     }
   );
 }
+
+export function markPenaltyReceived(
+  txnId: string
+): Promise<{ message: string }> {
+  return apiFetch<{ message: string }>(
+    `/transactions/${txnId}/mark-penalty-received`,
+    { method: 'POST' }
+  );
+}

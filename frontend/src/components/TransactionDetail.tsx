@@ -21,6 +21,7 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
   const [refundLoading, setRefundLoading] = useState(false);
   const [refundSuccess, setRefundSuccess] = useState(false);
   const [refundError, setRefundError] = useState<string | null>(null);
+  const [markingPenalty, setMarkingPenalty] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -60,12 +61,37 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
 
   const showComplaintCTA = transaction
     ? getStateDisplay(transaction.state).showComplaintAction
-        && (!isRealGateway || transaction.connectionStatus === 'DISCONNECTED')
     : false;
+
+  const showMarkPenaltyReceivedCTA = transaction
+    ? (transaction.state === 'PENALTY_ACCRUING' || transaction.state === 'ESCALATED')
+    : false;
+
+  const handleMarkPenaltyReceived = async () => {
+    if (!transaction) return;
+    try {
+      setMarkingPenalty(true);
+      const { markPenaltyReceived } = await import('../api/transactions');
+      await markPenaltyReceived(transaction.txnId);
+      // Close detail view to refresh main feed
+      onClose();
+    } catch (err) {
+      console.error('Failed to mark penalty received:', err);
+    } finally {
+      setMarkingPenalty(false);
+    }
+  };
 
   const isGatewayResolved = transaction
     ? isRealGateway
         && transaction.state === 'RESOLVED_REFUNDED'
+    : false;
+
+  const UNRESOLVED_STATES = ['DEEMED_APPROVED', 'PENDING_RECONCILIATION', 'TAT_BREACHED', 'PENALTY_ACCRUING'];
+  const canResolveByApi = transaction
+    ? isRealGateway 
+        && transaction.connectionStatus === 'ACTIVE'
+        && UNRESOLVED_STATES.includes(transaction.state)
     : false;
 
   const REFUND_ELIGIBLE_STATES = ['DEEMED_APPROVED', 'PENDING_RECONCILIATION', 'PENALTY_ACCRUING'];
@@ -208,13 +234,52 @@ export function TransactionDetail({ txnId, onClose }: TransactionDetailProps) {
                 </button>
               )}
 
+              {/* ── Manual Penalty Received CTA ───────────── */}
+              {showMarkPenaltyReceivedCTA && (
+                <button
+                  className="btn-primary btn-primary--full"
+                  style={{ marginTop: '0.5rem', backgroundColor: 'var(--success)' }}
+                  onClick={handleMarkPenaltyReceived}
+                  disabled={markingPenalty}
+                >
+                  {markingPenalty ? (
+                    <>
+                      <span className="spinner" style={{ width: 16, height: 16, borderWidth: 2 }} />
+                      Marking...
+                    </>
+                  ) : (
+                    <>✅ Mark Penalty Received (Manual)</>
+                  )}
+                </button>
+              )}
+
               {/* ── Gateway auto-resolved badge ──────────── */}
               {isGatewayResolved && (
                 <div className="gateway-resolved-banner" id="gateway-resolved-badge">
-                  <span className="gateway-resolved-banner__icon">⚡</span>
-                  <span>
-                    Auto-resolved via gateway ({transaction.sourceGateway}) — no draft needed
-                  </span>
+                  <span className="gateway-resolved-banner__icon">✓</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <span style={{ fontWeight: 600 }}>
+                      Auto-resolved via gateway
+                    </span>
+                    <span style={{ fontSize: '13px', color: 'var(--primary)', opacity: 0.85 }}>
+                      {transaction.resolutionReason || 'Resolved automatically — details unavailable'}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* ── API resolvable badge ──────────── */}
+              {canResolveByApi && (
+                <div className="gateway-resolved-banner" style={{ backgroundColor: '#f0f9ff', border: '1px solid #bae6fd', color: '#0369a1' }}>
+                  <span className="gateway-resolved-banner__icon">🔄</span>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <span style={{ fontWeight: 600 }}>
+                      Resolvable via API
+                    </span>
+                    <span style={{ fontSize: '13px', opacity: 0.85 }}>
+                      This transaction is connected to an active gateway and will be checked automatically.
+                    </span>
+                  </div>
                 </div>
               )}
 

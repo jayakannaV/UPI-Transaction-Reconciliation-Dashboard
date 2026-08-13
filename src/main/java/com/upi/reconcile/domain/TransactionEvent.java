@@ -43,5 +43,8 @@ public enum TransactionEvent {
     GATEWAY_STATUS_CHECK_SUCCESS,
 
     /** Gateway refund API call succeeded (PENALTY_ACCRUING → RESOLVED_REFUNDED). */
-    GATEWAY_REFUND_COMPLETED;
+    GATEWAY_REFUND_COMPLETED,
+
+    /** Manual reconciliation: penalty directly deposited in merchant's bank account (PENALTY_ACCRUING/ESCALATED → RESOLVED_REFUNDED). */
+    MANUAL_PENALTY_RECEIVED;
 }

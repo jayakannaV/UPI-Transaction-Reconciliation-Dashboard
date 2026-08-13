@@ -44,4 +44,7 @@ public class TransactionDto {
 
     /** Connection health at lookup time: "ACTIVE" / "DISCONNECTED", or null for simulated txns. */
     private String connectionStatus;
+
+    /** Descriptive reason for how this transaction was resolved. */
+    private String resolutionReason;
 }

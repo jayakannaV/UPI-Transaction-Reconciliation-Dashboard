@@ -66,9 +66,8 @@ public class BatchResolutionScheduler {
         OffsetDateTime now = OffsetDateTime.now();
         log.info("⏰ Batch resolution tick at {}", now);
 
-        // Sweep 0: Gateway-driven resolution (real API calls for Razorpay txns)
-        gatewayResolutionService.resolveRazorpayTransactions(now);
-
+        sweepDeemedApproved(now);
+        gatewayResolutionService.resolveGatewayTransactions(now);
         sweepResolution(now);
         sweepTatBreach(now);
         sweepPenaltyRecomputation(now);
@@ -87,7 +86,7 @@ public class BatchResolutionScheduler {
      * Resolution probability = {@code 1.0 - remitterBank.historicalTdRate}.
      * Higher historical TD rate → lower chance of clean auto-resolution this tick.
      */
-    void sweepResolution(OffsetDateTime now) {
+    void sweepDeemedApproved(OffsetDateTime now) {
         // Move DEEMED_APPROVED → PENDING_RECONCILIATION first
         List<Transaction> deemedApproved = transactionRepository.findByState(TransactionState.DEEMED_APPROVED);
 
@@ -99,9 +98,13 @@ public class BatchResolutionScheduler {
                 log.error("Failed to queue DEEMED_APPROVED txn {}: {}", txn.getTxnId(), e.getMessage());
             }
         }
+    }
 
-        // Now attempt resolution for all PENDING_RECONCILIATION
-        List<Transaction> pending = transactionRepository.findByState(TransactionState.PENDING_RECONCILIATION);
+    void sweepResolution(OffsetDateTime now) {
+
+        // Now attempt resolution for both PENDING_RECONCILIATION and PENALTY_ACCRUING
+        List<Transaction> pending = transactionRepository.findByStateIn(
+                List.of(TransactionState.PENDING_RECONCILIATION, TransactionState.PENALTY_ACCRUING));
 
         for (Transaction txn : pending) {
             try {
@@ -245,6 +248,10 @@ public class BatchResolutionScheduler {
         TransactionState fromState = txn.getState();
         TransactionState toState = stateMachine.transition(fromState, event);
 
+        if (toState == TransactionState.SUCCESS || toState == TransactionState.RESOLVED_REFUNDED) {
+            txn.setResolutionReason(reason);
+        }
+
         // Update entity
         txn.setState(toState);
         transactionRepository.save(txn);
@@ -270,7 +277,8 @@ public class BatchResolutionScheduler {
                 txn.getBeneficiaryBank() != null ? txn.getBeneficiaryBank().getBankId() : null,
                 at,
                 txn.getMerchantOwner() != null ? txn.getMerchantOwner().getMerchantId() : null,
-                txn.getConnectionId()));
+                txn.getConnectionId(),
+                txn.getResolutionReason()));
 
         log.debug("Transition: {} → {} [{}] for txn {}", fromState, toState, reason, txn.getTxnId());
     }

@@ -32,6 +32,8 @@ public class TransactionStateChangedEvent extends ApplicationEvent {
     private final UUID merchantId;
     /** Nullable — the gateway connection that produced this transaction. */
     private final UUID connectionId;
+    /** Descriptive reason for how this transaction was resolved. */
+    private final String resolutionReason;
 
     public TransactionStateChangedEvent(Object source,
             UUID txnId,
@@ -42,7 +44,8 @@ public class TransactionStateChangedEvent extends ApplicationEvent {
             UUID beneficiaryBankId,
             OffsetDateTime transitionedAt,
             UUID merchantId,
-            UUID connectionId) {
+            UUID connectionId,
+            String resolutionReason) {
         super(source);
         this.txnId = txnId;
         this.fromState = fromState;
@@ -53,5 +56,6 @@ public class TransactionStateChangedEvent extends ApplicationEvent {
         this.transitionedAt = transitionedAt;
         this.merchantId = merchantId;
         this.connectionId = connectionId;
+        this.resolutionReason = resolutionReason;
     }
 }

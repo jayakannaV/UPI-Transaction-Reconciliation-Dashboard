@@ -58,6 +58,9 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID>,
 
     // ── Chaos controller queries (demo-only) ─────────────────────────────
 
+    Optional<Transaction> findFirstByMerchantOwner_MerchantIdAndSourceGatewayAndStateOrderByCreatedAtDesc(
+            UUID merchantId, String sourceGateway, TransactionState state);
+
     /** Find a transaction by ID scoped to a specific merchant (ownership check). */
     @EntityGraph(attributePaths = {"remitterBank", "beneficiaryBank"})
     Optional<Transaction> findByTxnIdAndMerchantOwner_MerchantId(UUID txnId, UUID merchantId);
